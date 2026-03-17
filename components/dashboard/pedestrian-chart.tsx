@@ -15,32 +15,59 @@ import {
 
 interface PedestrianChartProps {
   timeRange: string
+  selectedDate: string
 }
 
 // Generate mock data based on time range
 const generateData = (timeRange: string) => {
-  const dataPoints = timeRange === "1h" ? 12 : timeRange === "6h" ? 24 : timeRange === "24h" ? 24 : 7
-  const data = []
+  let dataPoints: number
+  let labels: string[] = []
   
-  for (let i = 0; i < dataPoints; i++) {
-    let label: string
-    if (timeRange === "7d") {
-      const days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
-      label = days[i % 7]
-    } else {
-      const hour = Math.floor((i * (timeRange === "1h" ? 5 : timeRange === "6h" ? 15 : 60)) / 60)
-      const minute = (i * (timeRange === "1h" ? 5 : timeRange === "6h" ? 15 : 60)) % 60
-      label = `${hour.toString().padStart(2, "0")}:${minute.toString().padStart(2, "0")}`
-    }
-    
-    data.push({
-      time: label,
-      "North Gate": Math.floor(Math.random() * 150) + 50 + (i * 5),
-      "Main Hall": Math.floor(Math.random() * 200) + 80 + (i * 3),
-      "Parking Lot A": Math.floor(Math.random() * 100) + 30 + (i * 2),
-      "South Entrance": Math.floor(Math.random() * 120) + 40 + (i * 4),
-    })
+  switch (timeRange) {
+    case "whole-day":
+      dataPoints = 24
+      labels = Array.from({ length: 24 }, (_, i) => `${i.toString().padStart(2, "0")}:00`)
+      break
+    case "last-1h":
+      dataPoints = 12
+      labels = Array.from({ length: 12 }, (_, i) => `${(i * 5).toString().padStart(2, "0")} min`)
+      break
+    case "last-3h":
+      dataPoints = 18
+      labels = Array.from({ length: 18 }, (_, i) => `${Math.floor(i * 10 / 60)}:${((i * 10) % 60).toString().padStart(2, "0")}`)
+      break
+    case "last-6h":
+      dataPoints = 24
+      labels = Array.from({ length: 24 }, (_, i) => `${Math.floor(i * 15 / 60)}:${((i * 15) % 60).toString().padStart(2, "0")}`)
+      break
+    case "last-12h":
+      dataPoints = 24
+      labels = Array.from({ length: 24 }, (_, i) => `${Math.floor(i * 30 / 60)}:${((i * 30) % 60).toString().padStart(2, "0")}`)
+      break
+    case "morning":
+      dataPoints = 12
+      labels = Array.from({ length: 12 }, (_, i) => `${(6 + Math.floor(i / 2)).toString().padStart(2, "0")}:${(i % 2) * 30 === 0 ? "00" : "30"}`)
+      break
+    case "afternoon":
+      dataPoints = 12
+      labels = Array.from({ length: 12 }, (_, i) => `${(12 + Math.floor(i / 2)).toString().padStart(2, "0")}:${(i % 2) * 30 === 0 ? "00" : "30"}`)
+      break
+    case "evening":
+      dataPoints = 12
+      labels = Array.from({ length: 12 }, (_, i) => `${(18 + Math.floor(i / 2)).toString().padStart(2, "0")}:${(i % 2) * 30 === 0 ? "00" : "30"}`)
+      break
+    default:
+      dataPoints = 24
+      labels = Array.from({ length: 24 }, (_, i) => `${i.toString().padStart(2, "0")}:00`)
   }
+  
+  const data = labels.map((label, i) => ({
+    time: label,
+    "North Gate": Math.floor(Math.random() * 150) + 50 + (i * 5),
+    "Main Hall": Math.floor(Math.random() * 200) + 80 + (i * 3),
+    "Parking Lot A": Math.floor(Math.random() * 100) + 30 + (i * 2),
+    "South Entrance": Math.floor(Math.random() * 120) + 40 + (i * 4),
+  }))
   
   return data
 }
@@ -66,15 +93,18 @@ const CustomTooltip = ({ active, payload, label }: { active?: boolean; payload?:
   return null
 }
 
-export function PedestrianChart({ timeRange }: PedestrianChartProps) {
+export function PedestrianChart({ timeRange, selectedDate }: PedestrianChartProps) {
   const data = generateData(timeRange)
 
   return (
     <div className="p-6 rounded-xl bg-card border border-border">
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h3 className="text-lg font-semibold text-foreground">Pedestrian Count Over Time</h3>
-          <p className="text-sm text-muted-foreground">Aggregated by location</p>
+          <h3 className="text-base font-semibold text-foreground">Pedestrian Count Over Time</h3>
+          <p className="text-sm text-muted-foreground">
+            {selectedDate ? new Date(selectedDate).toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric" }) : "All dates"} 
+            {" - "}{timeRange.replace("-", " ").replace("whole day", "Whole Day")}
+          </p>
         </div>
       </div>
 

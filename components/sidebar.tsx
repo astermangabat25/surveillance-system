@@ -6,18 +6,12 @@ import { cn } from "@/lib/utils"
 import { 
   LayoutDashboard, 
   Video, 
-  Map, 
-  BarChart3, 
-  Settings,
   User
 } from "lucide-react"
 
 const navItems = [
-  { icon: LayoutDashboard, label: "Dashboard", href: "/dashboard" },
   { icon: Video, label: "Surveillance", href: "/" },
-  { icon: Map, label: "Map", href: "/map" },
-  { icon: BarChart3, label: "Analytics", href: "/analytics" },
-  { icon: Settings, label: "Settings", href: "/settings" },
+  { icon: LayoutDashboard, label: "Dashboard", href: "/dashboard" },
 ]
 
 export function Sidebar() {

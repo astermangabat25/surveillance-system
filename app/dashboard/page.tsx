@@ -3,7 +3,9 @@
 import { useState } from "react"
 import { KPICards } from "@/components/dashboard/kpi-cards"
 import { PedestrianChart } from "@/components/dashboard/pedestrian-chart"
+import { OcclusionMap } from "@/components/dashboard/occlusion-map"
 import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
 import {
   Select,
   SelectContent,
@@ -11,10 +13,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import { Clock, Download, RefreshCw } from "lucide-react"
+import { Calendar, Clock, Download, RefreshCw } from "lucide-react"
 
 export default function DashboardPage() {
-  const [timeRange, setTimeRange] = useState("1h")
+  const [selectedDate, setSelectedDate] = useState("2026-03-15")
+  const [timeRange, setTimeRange] = useState("whole-day")
+  const [hourFilter, setHourFilter] = useState("all")
 
   return (
     <div className="flex flex-col h-full">
@@ -26,6 +30,17 @@ export default function DashboardPage() {
         </div>
         
         <div className="flex items-center gap-3">
+          {/* Date Filter */}
+          <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-secondary border border-border">
+            <Calendar className="w-4 h-4 text-muted-foreground" />
+            <Input
+              type="date"
+              value={selectedDate}
+              onChange={(e) => setSelectedDate(e.target.value)}
+              className="border-0 bg-transparent p-0 h-auto text-sm w-36 focus-visible:ring-0"
+            />
+          </div>
+
           {/* Time Range Filter */}
           <Select value={timeRange} onValueChange={setTimeRange}>
             <SelectTrigger className="w-44 bg-secondary border-border text-foreground">
@@ -33,10 +48,14 @@ export default function DashboardPage() {
               <SelectValue placeholder="Select time range" />
             </SelectTrigger>
             <SelectContent className="bg-card border-border">
-              <SelectItem value="1h" className="text-foreground">Last 1 Hour</SelectItem>
-              <SelectItem value="6h" className="text-foreground">Last 6 Hours</SelectItem>
-              <SelectItem value="24h" className="text-foreground">Last 24 Hours</SelectItem>
-              <SelectItem value="7d" className="text-foreground">Last 7 Days</SelectItem>
+              <SelectItem value="whole-day" className="text-foreground">Whole Day</SelectItem>
+              <SelectItem value="last-1h" className="text-foreground">Last 1 Hour</SelectItem>
+              <SelectItem value="last-3h" className="text-foreground">Last 3 Hours</SelectItem>
+              <SelectItem value="last-6h" className="text-foreground">Last 6 Hours</SelectItem>
+              <SelectItem value="last-12h" className="text-foreground">Last 12 Hours</SelectItem>
+              <SelectItem value="morning" className="text-foreground">Morning (6AM-12PM)</SelectItem>
+              <SelectItem value="afternoon" className="text-foreground">Afternoon (12PM-6PM)</SelectItem>
+              <SelectItem value="evening" className="text-foreground">Evening (6PM-12AM)</SelectItem>
             </SelectContent>
           </Select>
 
@@ -57,8 +76,14 @@ export default function DashboardPage() {
         {/* KPI Cards */}
         <KPICards />
 
-        {/* Main Chart */}
-        <PedestrianChart timeRange={timeRange} />
+        {/* Two Column Layout */}
+        <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+          {/* Main Chart */}
+          <PedestrianChart timeRange={timeRange} selectedDate={selectedDate} />
+          
+          {/* Occlusion Severity Map */}
+          <OcclusionMap hourFilter={hourFilter} onHourFilterChange={setHourFilter} />
+        </div>
       </div>
     </div>
   )
