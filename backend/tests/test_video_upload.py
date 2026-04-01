@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import sys
 import threading
 from pathlib import Path
@@ -1842,6 +1843,8 @@ def test_dashboard_endpoints_only_surface_real_footage_and_neutral_empty_locatio
     assert edsa_sec_walk["hasFootage"] is True
     assert edsa_sec_walk["hasPTSIData"] is True
     assert edsa_sec_walk["state"] == "clear"
+    assert edsa_sec_walk["los"] == "A"
+    assert edsa_sec_walk["losDescription"] == "very high pedestrian space, free movement"
     assert edsa_sec_walk["score"] == pytest.approx(26.0, abs=0.01)
     assert edsa_sec_walk["mode"] == "strict-fhwa"
     assert edsa_sec_walk["averagePedestrians"] == pytest.approx(1.0, abs=0.01)
@@ -1853,8 +1856,8 @@ def test_dashboard_endpoints_only_surface_real_footage_and_neutral_empty_locatio
     }
     assert edsa_sec_walk["peakHour"] == "10:00"
     assert edsa_sec_walk["peakHourScore"] == pytest.approx(26.0, abs=0.01)
-    assert edsa_sec_walk["offPeakHour"] == "10:00"
-    assert edsa_sec_walk["offPeakHourScore"] == pytest.approx(26.0, abs=0.01)
+    assert edsa_sec_walk["offPeakHour"] is None
+    assert edsa_sec_walk["offPeakHourScore"] is None
     assert edsa_sec_walk["hourlyScores"] == [
         {
             "hour": "10:00",
@@ -1867,6 +1870,8 @@ def test_dashboard_endpoints_only_surface_real_footage_and_neutral_empty_locatio
                 "moderatePercent": pytest.approx(50.0, abs=0.01),
                 "heavyPercent": pytest.approx(0.0, abs=0.01),
             },
+            "los": "A",
+            "losDescription": "very high pedestrian space, free movement",
         }
     ]
     assert kostka_walk["hasFootage"] is False
@@ -1935,7 +1940,10 @@ def test_dashboard_occlusion_uses_per_second_trajectory_samples_for_ptsi(monkeyp
 
     assert edsa_sec_walk["hasPTSIData"] is True
     assert edsa_sec_walk["mode"] == "roi-testing"
-    assert edsa_sec_walk["score"] == pytest.approx(20.21, abs=0.01)
+    assert edsa_sec_walk["state"] == "clear"
+    assert edsa_sec_walk["los"] == "A"
+    assert edsa_sec_walk["losDescription"] == "very high pedestrian space, free movement"
+    assert edsa_sec_walk["score"] == pytest.approx(13.48, abs=0.01)
     assert edsa_sec_walk["averagePedestrians"] == pytest.approx(1.5, abs=0.01)
     assert edsa_sec_walk["uniquePedestrians"] == 3
     assert edsa_sec_walk["occlusionMix"] == {
@@ -1943,10 +1951,14 @@ def test_dashboard_occlusion_uses_per_second_trajectory_samples_for_ptsi(monkeyp
         "moderatePercent": pytest.approx(0.0, abs=0.01),
         "heavyPercent": pytest.approx(33.3, abs=0.1),
     }
+    assert edsa_sec_walk["peakHour"] == "10:00"
+    assert edsa_sec_walk["peakHourScore"] == pytest.approx(13.48, abs=0.01)
+    assert edsa_sec_walk["offPeakHour"] is None
+    assert edsa_sec_walk["offPeakHourScore"] is None
     assert edsa_sec_walk["hourlyScores"] == [
         {
             "hour": "10:00",
-            "score": pytest.approx(20.21, abs=0.01),
+            "score": pytest.approx(13.48, abs=0.01),
             "mode": "roi-testing",
             "averagePedestrians": pytest.approx(1.5, abs=0.01),
             "uniquePedestrians": 3,
@@ -1955,8 +1967,115 @@ def test_dashboard_occlusion_uses_per_second_trajectory_samples_for_ptsi(monkeyp
                 "moderatePercent": pytest.approx(0.0, abs=0.01),
                 "heavyPercent": pytest.approx(33.3, abs=0.1),
             },
+            "los": "A",
+            "losDescription": "very high pedestrian space, free movement",
         }
     ]
+
+
+@pytest.mark.parametrize(
+    ("space_per_pedestrian", "expected_los"),
+    [
+        (5.7, "A"),
+        (5.6, "B"),
+        (3.7, "B"),
+        (3.69, "C"),
+        (2.2, "C"),
+        (2.19, "D"),
+        (1.4, "D"),
+        (1.39, "E"),
+        (0.75, "E"),
+        (0.74, "F"),
+    ],
+)
+def test_ptsi_los_from_space_per_pedestrian_uses_fhwa_walkway_thresholds(space_per_pedestrian: float, expected_los: str) -> None:
+    assert store._ptsi_los_from_space_per_pedestrian(space_per_pedestrian) == expected_los
+
+
+@pytest.mark.parametrize(
+    ("los", "expected_state"),
+    [("A", "clear"), ("B", "clear"), ("C", "clear"), ("D", "moderate"), ("E", "moderate"), ("F", "severe")],
+)
+def test_ptsi_los_state_collapses_fhwa_bands_into_map_colors(los: str, expected_state: str) -> None:
+    assert store._ptsi_los_state(los, has_footage=True, has_occlusion_data=True) == expected_state
+
+
+@pytest.mark.parametrize(
+    ("score", "expected_los"),
+    [
+        (14.99, "A"),
+        (15.0, "B"),
+        (32.99, "B"),
+        (33.0, "C"),
+        (49.99, "C"),
+        (50.0, "D"),
+        (65.7, "D"),
+        (66.0, "E"),
+        (84.99, "E"),
+        (85.0, "F"),
+    ],
+)
+def test_ptsi_los_from_score_uses_provisional_score_bands(score: float, expected_los: str) -> None:
+    assert store._ptsi_los_from_score(score) == expected_los
+
+
+def test_dashboard_occlusion_emits_ptsi_debug_logs_when_enabled(monkeypatch, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    configure_temp_storage(monkeypatch, tmp_path)
+    monkeypatch.setenv("PTSI_DEBUG", "1")
+
+    state = store.seed_state()
+    for location in state["locations"]:
+        if location["id"] == "edsa-sec-walk":
+            location["roiCoordinates"] = {
+                "referenceSize": [1920, 1080],
+                "includePolygonsNorm": [[[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]],
+            }
+            location["walkableAreaM2"] = None
+
+    state["videos"] = [
+        {
+            "id": "video-ptsi-debug",
+            "locationId": "edsa-sec-walk",
+            "location": "EDSA Sec Walk",
+            "timestamp": "10:00",
+            "date": "2026-03-17",
+            "startTime": "10:00",
+            "endTime": "10:10",
+            "gpsLat": 14.6397,
+            "gpsLng": 121.0775,
+            "pedestrianCount": 2,
+            "rawPath": None,
+            "processedPath": None,
+        }
+    ]
+    state["pedestrianTracks"] = [
+        {
+            "id": "track-debug-a",
+            "videoId": "video-ptsi-debug",
+            "pedestrianId": 1,
+            "location": "EDSA Sec Walk",
+            "trajectorySamples": [[0, 0.25, 0.25, 0]],
+        },
+        {
+            "id": "track-debug-b",
+            "videoId": "video-ptsi-debug",
+            "pedestrianId": 2,
+            "location": "EDSA Sec Walk",
+            "trajectorySamples": [[0, 0.35, 0.35, 2]],
+        },
+    ]
+    store.save_state(state)
+
+    with caplog.at_level(logging.INFO, logger="backend.app.store"):
+        with TestClient(main.app) as client:
+            response = client.get("/api/dashboard/occlusion", params={"date": "2026-03-17", "timeRange": "whole-day"})
+
+    assert response.status_code == 200
+    log_messages = [record.getMessage() for record in caplog.records if record.name == "backend.app.store"]
+    assert any('PTSI_DEBUG {"capacityProxy": 24.0, "event": "location_config"' in message for message in log_messages)
+    assert any('"event": "second_score"' in message and '"visibleCount": 2' in message for message in log_messages)
+    assert any('"event": "hour_rollup"' in message and '"p90Score"' in message for message in log_messages)
+    assert any('"event": "location_summary"' in message and '"peakHour": "10:00"' in message for message in log_messages)
 
 
 def test_dashboard_traffic_uses_full_track_totals_instead_of_truncated_events(monkeypatch, tmp_path: Path) -> None:

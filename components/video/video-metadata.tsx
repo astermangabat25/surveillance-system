@@ -8,6 +8,7 @@ interface VideoMetadataProps {
   endTime: string
   gpsLat: number
   gpsLng: number
+  trackedPedestriansSoFar: number
   pedestrianCount: number
 }
 
@@ -17,10 +18,11 @@ export function VideoMetadata({
   endTime, 
   gpsLat, 
   gpsLng,
+  trackedPedestriansSoFar,
   pedestrianCount 
 }: VideoMetadataProps) {
   return (
-    <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+    <div className="grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-5">
       <MetadataCard
         icon={Calendar}
         label="Date"
@@ -35,6 +37,12 @@ export function VideoMetadata({
         icon={MapPin}
         label="GPS Location"
         value={`${gpsLat.toFixed(4)}, ${gpsLng.toFixed(4)}`}
+      />
+      <MetadataCard
+        icon={Users}
+        label="Tracked So Far"
+        value={trackedPedestriansSoFar.toString()}
+        highlight
       />
       <MetadataCard
         icon={Users}

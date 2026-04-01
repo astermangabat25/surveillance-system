@@ -9,8 +9,9 @@ import { PlaybackTimeline } from "@/components/video/playback-timeline"
 import { EventFeed } from "@/components/surveillance/event-feed"
 import { AISearchBar } from "@/components/surveillance/ai-search-bar"
 import { Button } from "@/components/ui/button"
+import { Switch } from "@/components/ui/switch"
 import { AlertCircle, ArrowLeft, Download, Loader2, Share2, Trash2 } from "lucide-react"
-import { deleteVideo, getEvents, getMediaUrl, getVideo, getVideoPlaybackPath, type EventRecord, type VideoRecord } from "@/lib/api"
+import { deleteVideo, getEvents, getLocations, getMediaUrl, getVideo, getVideoPlaybackPath, type EventRecord, type LocationRecord, type VideoRecord } from "@/lib/api"
 
 function getDetectionStatus(event: EventRecord) {
   if (event.type === "alert") return "Requires Review"
@@ -23,6 +24,7 @@ function VideoDetailContent({ params }: { params: Promise<{ id: string }> }) {
   const router = useRouter()
   const searchParams = useSearchParams()
   const [video, setVideo] = useState<VideoRecord | null>(null)
+  const [videoLocation, setVideoLocation] = useState<LocationRecord | null>(null)
   const [events, setEvents] = useState<EventRecord[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -32,6 +34,7 @@ function VideoDetailContent({ params }: { params: Promise<{ id: string }> }) {
   const [currentTimeSeconds, setCurrentTimeSeconds] = useState(0)
   const [durationSeconds, setDurationSeconds] = useState(0)
   const [showAllDetections, setShowAllDetections] = useState(false)
+  const [showROI, setShowROI] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const videoElementRef = useRef<HTMLVideoElement | null>(null)
   const seekTokenRef = useRef(0)
@@ -43,10 +46,15 @@ function VideoDetailContent({ params }: { params: Promise<{ id: string }> }) {
     const loadVideo = async () => {
       setLoading(true)
       try {
-        const [videoResponse, eventsResponse] = await Promise.all([getVideo(id), getEvents(id)])
+        const [videoResponse, eventsResponse, locationsResponse] = await Promise.all([
+          getVideo(id),
+          getEvents(id),
+          getLocations().catch(() => null),
+        ])
 
         if (!cancelled) {
           setVideo(videoResponse)
+          setVideoLocation((locationsResponse ?? []).find((location) => location.id === videoResponse.locationId) ?? null)
           setEvents(eventsResponse)
           setError(null)
           setActionError(null)
@@ -71,6 +79,7 @@ function VideoDetailContent({ params }: { params: Promise<{ id: string }> }) {
 
   useEffect(() => {
     setShowAllDetections(false)
+    setShowROI(false)
     setCurrentTimeSeconds(0)
     setDurationSeconds(0)
   }, [id])
@@ -119,8 +128,24 @@ function VideoDetailContent({ params }: { params: Promise<{ id: string }> }) {
       .map((event) => ({ id: event.pedestrianId, status: getDetectionStatus(event) }))
   }, [orderedEvents])
 
+  const trackedPedestriansSoFar = useMemo(() => {
+    const seen = new Set<number>()
+
+    for (const event of orderedEvents) {
+      if (typeof event.pedestrianId !== "number" || typeof event.offsetSeconds !== "number") {
+        continue
+      }
+      if (event.offsetSeconds <= currentTimeSeconds) {
+        seen.add(event.pedestrianId)
+      }
+    }
+
+    return seen.size
+  }, [currentTimeSeconds, orderedEvents])
+
   const visibleDetectionDetails = showAllDetections ? detectionDetails : detectionDetails.slice(0, 15)
   const hasCollapsedDetections = detectionDetails.length > 15
+  const hasLocationROI = Boolean(videoLocation?.roiCoordinates?.includePolygonsNorm?.length)
 
   const mediaUrl = video ? getMediaUrl(getVideoPlaybackPath(video)) : null
 
@@ -264,6 +289,19 @@ function VideoDetailContent({ params }: { params: Promise<{ id: string }> }) {
               </div>
             )}
 
+            {hasLocationROI && (
+              <div className="flex items-center justify-between gap-4 rounded-2xl border border-border/70 bg-card/70 px-4 py-3 shadow-elevated-sm">
+                <div>
+                  <p className="text-sm font-medium text-foreground">Show ROI Outline</p>
+                  <p className="text-xs text-muted-foreground">Display the stored walkable ROI polygons over the video for alignment debugging.</p>
+                </div>
+                <div className="flex items-center gap-3">
+                  <span className="text-xs font-medium text-muted-foreground">{showROI ? "ON" : "OFF"}</span>
+                  <Switch checked={showROI} onCheckedChange={setShowROI} aria-label="Show ROI Outline" />
+                </div>
+              </div>
+            )}
+
             {/* Video Player with Bounding Boxes */}
             <VideoPlayer
               videoId={video.id}
@@ -275,6 +313,8 @@ function VideoDetailContent({ params }: { params: Promise<{ id: string }> }) {
               isProcessed={Boolean(video.processedPath)}
               videoRef={videoElementRef}
               requestedSeek={requestedSeek}
+              roiCoordinates={videoLocation?.roiCoordinates ?? null}
+              showROI={showROI}
               onTimeUpdate={setCurrentTimeSeconds}
               onDurationChange={setDurationSeconds}
             />
@@ -296,6 +336,7 @@ function VideoDetailContent({ params }: { params: Promise<{ id: string }> }) {
               endTime={video.endTime}
               gpsLat={video.gpsLat}
               gpsLng={video.gpsLng}
+              trackedPedestriansSoFar={trackedPedestriansSoFar}
               pedestrianCount={video.pedestrianCount}
             />
           </div>

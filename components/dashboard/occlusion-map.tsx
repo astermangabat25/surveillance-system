@@ -69,12 +69,15 @@ function resolveHourlyScore(location: PTSILocation, hourFilter: string) {
 
 function resolveSelectedHourData(location: PTSILocation, hourFilter: string) {
   if (hourFilter === "all") {
+    const peakHourData = location.peakHour ? location.hourlyScores.find((item) => item.hour === location.peakHour) : null
     return {
-      score: location.score ?? null,
-      mode: location.mode ?? null,
-      averagePedestrians: location.averagePedestrians ?? null,
-      uniquePedestrians: location.uniquePedestrians ?? null,
-      occlusionMix: location.occlusionMix ?? null,
+      score: peakHourData?.score ?? location.score ?? null,
+      mode: peakHourData?.mode ?? location.mode ?? null,
+      averagePedestrians: peakHourData?.averagePedestrians ?? location.averagePedestrians ?? null,
+      uniquePedestrians: peakHourData?.uniquePedestrians ?? location.uniquePedestrians ?? null,
+      occlusionMix: peakHourData?.occlusionMix ?? location.occlusionMix ?? null,
+      los: peakHourData?.los ?? location.los ?? null,
+      losDescription: peakHourData?.losDescription ?? location.losDescription ?? null,
     }
   }
 
@@ -85,7 +88,35 @@ function resolveSelectedHourData(location: PTSILocation, hourFilter: string) {
     averagePedestrians: hourData?.averagePedestrians ?? null,
     uniquePedestrians: hourData?.uniquePedestrians ?? null,
     occlusionMix: hourData?.occlusionMix ?? null,
+    los: hourData?.los ?? null,
+    losDescription: hourData?.losDescription ?? null,
   }
+}
+
+function resolveStateFromLos(los: PTSILocation["los"]): PTSIState {
+  if (los === "A" || los === "B" || los === "C") {
+    return "clear"
+  }
+  if (los === "D" || los === "E") {
+    return "moderate"
+  }
+  if (los === "F") {
+    return "severe"
+  }
+  return "no-data"
+}
+
+function formatSeverityCategory(state: PTSIState) {
+  if (state === "clear") {
+    return "Light severity"
+  }
+  if (state === "moderate") {
+    return "Moderate severity"
+  }
+  if (state === "severe") {
+    return "High severity"
+  }
+  return null
 }
 
 function resolveState(location: PTSILocation, hourFilter: string): PTSIState {
@@ -96,17 +127,11 @@ function resolveState(location: PTSILocation, hourFilter: string): PTSIState {
     return "no-footage"
   }
 
-  const score = resolveHourlyScore(location, hourFilter)
-  if (score === null) {
+  const detail = resolveSelectedHourData(location, hourFilter)
+  if (detail.los == null) {
     return "no-data"
   }
-  if (score <= 32) {
-    return "clear"
-  }
-  if (score <= 65) {
-    return "moderate"
-  }
-  return "severe"
+  return resolveStateFromLos(detail.los)
 }
 
 function getSeverityVisual(state: PTSIState) {
@@ -124,7 +149,11 @@ function getSeverityVisual(state: PTSIState) {
   }
 }
 
-function describeState(state: PTSIState, score: number | null) {
+function formatLosLabel(los: PTSILocation["los"]) {
+  return los ? `LOS ${los}` : "LOS —"
+}
+
+function describeState(state: PTSIState, detail: ReturnType<typeof resolveSelectedHourData>) {
   if (state === "no-footage") {
     return "No footage for this location in the selected date range"
   }
@@ -132,16 +161,15 @@ function describeState(state: PTSIState, score: number | null) {
     return "Footage exists, but no ROI-qualified pedestrian tracks are available yet"
   }
 
-  const label = state === "clear" ? "Low severity" : state === "moderate" ? "Moderate severity" : "High severity"
-  return `${label} · PTSI ${score?.toFixed(1) ?? "0.0"}%`
+  return `${formatSeverityCategory(state)} · ${formatLosLabel(detail.los)} · ${detail.losDescription ?? "FHWA/HCM walkway interpretation unavailable"} · PTSI ${detail.score?.toFixed(1) ?? "0.0"}%`
 }
 
 function formatModeLabel(mode: PTSILocation["mode"]) {
   if (mode === "strict-fhwa") {
-    return "Strict FHWA"
+    return "Strict FHWA LOS"
   }
   if (mode === "roi-testing") {
-    return "ROI Testing"
+    return "FHWA-inspired provisional interpretation"
   }
   return "Unknown"
 }
@@ -162,11 +190,18 @@ function formatOcclusionMix(location: PTSILocation, hourFilter: string) {
   return `L ${mix.lightPercent.toFixed(0)}% · M ${mix.moderatePercent.toFixed(0)}% · H ${mix.heavyPercent.toFixed(0)}%`
 }
 
-function formatPeakHourSummary(hour: string | null | undefined, score: number | null | undefined) {
-  if (!hour || score == null) {
+function formatHourConditionSummary(location: PTSILocation, hour: string | null | undefined) {
+  if (!hour) {
     return "—"
   }
-  return `${formatHourLabel(hour)} · ${score.toFixed(1)}%`
+
+  const hourData = location.hourlyScores.find((item) => item.hour === hour)
+  if (!hourData) {
+    return formatHourLabel(hour)
+  }
+
+  const losSummary = hourData.los ? `${formatLosLabel(hourData.los)} · ` : ""
+  return `${formatHourLabel(hour)} · ${losSummary}PTSI ${hourData.score.toFixed(1)}%`
 }
 
 function getTooltipPlacement(x: number, y: number): { style: CSSProperties; className: string } {
@@ -351,22 +386,22 @@ function buildLabelPlacements(plottedLocations: PlottedLocation[], mapDimensions
   ) as Record<string, { left: number; top: number }>
 }
 
-function getStateLabel(state: PTSIState) {
+function getStateLabel(state: PTSIState, los: PTSILocation["los"]) {
   switch (state) {
     case "clear":
-      return "Low"
+      return formatLosLabel(los)
     case "moderate":
-      return "Moderate"
+      return formatLosLabel(los)
     case "severe":
-      return "High"
+      return formatLosLabel(los)
     case "no-data":
-      return "No PTSI data"
+      return "No LOS data"
     default:
       return "No footage"
   }
 }
 
-function getStateSummary(state: PTSIState, score: number | null) {
+function getStateSummary(state: PTSIState, detail: ReturnType<typeof resolveSelectedHourData>) {
   if (state === "no-footage") {
     return "No footage in selected range"
   }
@@ -375,7 +410,7 @@ function getStateSummary(state: PTSIState, score: number | null) {
     return "Footage available, but no ROI-qualified pedestrian traffic data yet"
   }
 
-  return `PTSI ${score?.toFixed(1) ?? "0.0"}%`
+  return `${formatSeverityCategory(state)} · ${formatLosLabel(detail.los)} · ${detail.losDescription ?? "FHWA/HCM walkway interpretation unavailable"} · PTSI ${detail.score?.toFixed(1) ?? "0.0"}%`
 }
 
 function LegendItem({ color, label, detail }: { color: string; label: string; detail: string }) {
@@ -480,11 +515,11 @@ export function OcclusionMap({ hourFilter, onHourFilterChange, data, loading = f
                 </button>
               </TooltipTrigger>
               <TooltipContent side="bottom" sideOffset={8} className="max-w-72 rounded-xl px-3 py-2 text-xs">
-                PTSI uses the 90th percentile of 100 × (0.85 × congestion + 0.15 × occlusion). Strict FHWA mode uses walkable area and space-per-pedestrian bands; ROI Testing mode uses ROI-qualified counts against a capacity proxy.
+                PTSI uses the 90th percentile of 100 × (0.85 × congestion + 0.15 × occlusion). Strict FHWA mode derives LOS from walkable area and space-per-pedestrian thresholds; FHWA-inspired provisional interpretation keeps the internal PTSI score and maps score bands into LOS labels for the UI.
               </TooltipContent>
             </Tooltip>
           </div>
-          <p className="text-sm text-muted-foreground">90th percentile PTSI by location</p>
+          <p className="text-sm text-muted-foreground">LOS-based interpretation first, with PTSI shown as supporting detail</p>
         </div>
 
         <Select value={hourFilter} onValueChange={onHourFilterChange}>
@@ -533,7 +568,7 @@ export function OcclusionMap({ hourFilter, onHourFilterChange, data, loading = f
           <>
             {plottedLocations.map((location) => {
               const pos = location.position
-              const score = resolveHourlyScore(location, hourFilter)
+              const detail = resolveSelectedHourData(location, hourFilter)
               const state = resolveState(location, hourFilter)
               const visual = getSeverityVisual(state)
               const isGlowing = state === "clear" || state === "moderate" || state === "severe"
@@ -608,7 +643,7 @@ export function OcclusionMap({ hourFilter, onHourFilterChange, data, loading = f
                       return (
                         <>
                     <p className="font-medium text-foreground">{location.name}</p>
-                          <p className="mt-1 text-muted-foreground">{describeState(state, score)}</p>
+                          <p className="mt-1 text-muted-foreground">{describeState(state, detail)}</p>
                           <p className="mt-1 text-[11px] text-muted-foreground">
                             {hourFilter === "all" ? "Peak hour across the selected range" : `Selected hour: ${formatHourLabel(hourFilter)}`}
                           </p>
@@ -617,8 +652,8 @@ export function OcclusionMap({ hourFilter, onHourFilterChange, data, loading = f
                             <p><span className="font-medium text-foreground">Avg pedestrians:</span> {formatPedestrianMetric(detail.averagePedestrians)}</p>
                             <p><span className="font-medium text-foreground">Unique pedestrians:</span> {formatPedestrianMetric(detail.uniquePedestrians)}</p>
                             <p><span className="font-medium text-foreground">Occlusion mix:</span> {formatOcclusionMix(location, hourFilter)}</p>
-                            <p><span className="font-medium text-foreground">Peak hour:</span> {formatPeakHourSummary(location.peakHour, location.peakHourScore)}</p>
-                            <p><span className="font-medium text-foreground">Off-peak:</span> {formatPeakHourSummary(location.offPeakHour, location.offPeakHourScore)}</p>
+                            <p><span className="font-medium text-foreground">Peak hour:</span> {formatHourConditionSummary(location, location.peakHour)}</p>
+                            <p><span className="font-medium text-foreground">Off-peak:</span> {formatHourConditionSummary(location, location.offPeakHour)}</p>
                           </div>
                         </>
                       )
@@ -650,7 +685,7 @@ export function OcclusionMap({ hourFilter, onHourFilterChange, data, loading = f
 
           <div className="grid max-h-56 grid-cols-1 gap-2 overflow-y-auto pr-1 sm:grid-cols-2">
             {plottedLocations.map((location) => {
-              const score = resolveHourlyScore(location, hourFilter)
+              const detail = resolveSelectedHourData(location, hourFilter)
               const state = resolveState(location, hourFilter)
               const visual = getSeverityVisual(state)
               const isHovered = hoveredLocationId === location.id
@@ -681,10 +716,10 @@ export function OcclusionMap({ hourFilter, onHourFilterChange, data, loading = f
                     <div className="flex flex-wrap items-center gap-2">
                       <p className="text-xs font-medium leading-tight text-foreground">{location.name}</p>
                       <span className="rounded-full bg-secondary px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
-                        {getStateLabel(state)}
+                        {getStateLabel(state, detail.los)}
                       </span>
                     </div>
-                    <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">{getStateSummary(state, score)}</p>
+                    <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">{getStateSummary(state, detail)}</p>
                   </div>
                 </button>
               )
@@ -694,9 +729,9 @@ export function OcclusionMap({ hourFilter, onHourFilterChange, data, loading = f
       )}
 
       <div className="mt-4 grid grid-cols-1 gap-3 border-t border-border pt-4 sm:grid-cols-2">
-        <LegendItem color="#FACC15" label="Low severity" detail="0–32% · comfortable pedestrian flow" />
-        <LegendItem color="#F97316" label="Moderate severity" detail="33–65% · denser flow and reduced spacing" />
-        <LegendItem color="#EF4444" label="High severity" detail="66–100% · likely bottleneck and crowding" />
+        <LegendItem color="#FACC15" label="Light severity (LOS A–C)" detail="Very high space to manageable pedestrian interaction" />
+        <LegendItem color="#F97316" label="Moderate severity (LOS D–E)" detail="Limited space to crowded conditions with frequent interference" />
+        <LegendItem color="#EF4444" label="High severity (LOS F)" detail="Severely congested conditions and breakdown of smooth movement" />
         <LegendItem color="#64748B" label="Neutral marker" detail="No footage or no ROI-qualified PTSI data" />
       </div>
     </div>

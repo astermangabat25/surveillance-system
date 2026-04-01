@@ -109,6 +109,7 @@ export interface PTSITrendResponse {
 }
 
 export type PTSIState = "clear" | "moderate" | "severe" | "no-footage" | "no-data"
+export type PTSILOS = "A" | "B" | "C" | "D" | "E" | "F"
 
 export type PTSIMode = "strict-fhwa" | "roi-testing"
 
@@ -125,6 +126,8 @@ export interface PTSIHourScore {
   averagePedestrians?: number | null
   uniquePedestrians?: number | null
   occlusionMix?: PTSIOcclusionMix | null
+  los?: PTSILOS | null
+  losDescription?: string | null
 }
 
 export interface PTSILocation {
@@ -140,6 +143,8 @@ export interface PTSILocation {
   averagePedestrians?: number | null
   uniquePedestrians?: number | null
   occlusionMix?: PTSIOcclusionMix | null
+  los?: PTSILOS | null
+  losDescription?: string | null
   peakHour?: string | null
   peakHourScore?: number | null
   offPeakHour?: string | null

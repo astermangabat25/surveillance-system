@@ -112,6 +112,8 @@ class PTSIHourScore(BaseModel):
     averagePedestrians: Optional[float] = None
     uniquePedestrians: Optional[int] = None
     occlusionMix: Optional[dict[str, float]] = None
+    los: Optional[Literal["A", "B", "C", "D", "E", "F"]] = None
+    losDescription: Optional[str] = None
 
 
 class PTSILocation(BaseModel):
@@ -127,6 +129,8 @@ class PTSILocation(BaseModel):
     averagePedestrians: Optional[float] = None
     uniquePedestrians: Optional[int] = None
     occlusionMix: Optional[dict[str, float]] = None
+    los: Optional[Literal["A", "B", "C", "D", "E", "F"]] = None
+    losDescription: Optional[str] = None
     peakHour: Optional[str] = None
     peakHourScore: Optional[float] = None
     offPeakHour: Optional[str] = None

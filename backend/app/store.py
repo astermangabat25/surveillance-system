@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import json
+import logging
+import math
+import os
 import re
 import shutil
 from collections.abc import Callable
@@ -10,6 +13,8 @@ from pathlib import Path
 from threading import Lock
 from typing import Any, Optional, Union
 from uuid import uuid4
+
+logger = logging.getLogger(__name__)
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 STORAGE_DIR = BACKEND_DIR / "storage"
@@ -24,7 +29,25 @@ OWDI_CLASS_WEIGHTS = {0: 1, 1: 2, 2: 3}
 PTSI_OCCLUSION_WEIGHTS = {0: 1, 1: 2, 2: 3}
 PTSI_CONGESTION_WEIGHT = 0.85
 PTSI_OCCLUSION_WEIGHT = 0.15
-PTSI_ROI_TESTING_CAPACITY_PER_FULL_FRAME = 12.0
+PTSI_ROI_TESTING_CAPACITY_PER_FULL_FRAME = 24.0
+PTSI_LOS_DESCRIPTIONS = {
+    "A": "very high pedestrian space, free movement",
+    "B": "high pedestrian space, comfortable movement",
+    "C": "adequate space, noticeable interaction but manageable flow",
+    "D": "limited space, constrained movement",
+    "E": "crowded conditions, frequent interference",
+    "F": "severely congested conditions, breakdown of smooth movement",
+}
+PTSI_LOS_RANKS = {"A": 0, "B": 1, "C": 2, "D": 3, "E": 4, "F": 5}
+PTSI_LOS_BY_RANK = {rank: los for los, rank in PTSI_LOS_RANKS.items()}
+PTSI_LOS_STATE_MAP = {
+    "A": "clear",
+    "B": "clear",
+    "C": "clear",
+    "D": "moderate",
+    "E": "moderate",
+    "F": "severe",
+}
 DEFAULT_EDSA_SEC_WALK_ROI = {
     "referenceSize": [1920, 1080],
     "includePolygonsNorm": [
@@ -940,7 +963,25 @@ def _location_roi_area_ratio(location: dict[str, Any]) -> float:
 
 
 def _location_capacity_proxy(location: dict[str, Any]) -> float:
-    return max(1.0, _location_roi_area_ratio(location) * PTSI_ROI_TESTING_CAPACITY_PER_FULL_FRAME)
+    return max(1.0, math.sqrt(_location_roi_area_ratio(location)) * PTSI_ROI_TESTING_CAPACITY_PER_FULL_FRAME)
+
+
+def _ptsi_debug_enabled() -> bool:
+    return os.getenv("PTSI_DEBUG", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _ptsi_debug_log(event: str, **fields: Any) -> None:
+    if not _ptsi_debug_enabled():
+        return
+
+    serialized_fields: dict[str, Any] = {"event": event}
+    for key, value in fields.items():
+        if isinstance(value, datetime):
+            serialized_fields[key] = value.isoformat()
+        else:
+            serialized_fields[key] = value
+
+    logger.info("PTSI_DEBUG %s", json.dumps(serialized_fields, sort_keys=True))
 
 
 def _ptsi_occlusion_mix(light_count: int, moderate_count: int, heavy_count: int, visible_total: int) -> dict[str, float]:
@@ -1438,17 +1479,109 @@ def _ptsi_congestion_score(visible_count: int, walkable_area_m2: Optional[float]
     return 1.0
 
 
-def _ptsi_score(visible_count: int, location: dict[str, Any], occlusion_value: float) -> float:
+def _ptsi_los_from_space_per_pedestrian(space_per_pedestrian: Optional[float]) -> Optional[str]:
+    if space_per_pedestrian is None or space_per_pedestrian <= 0:
+        return None
+    if space_per_pedestrian > 5.6:
+        return "A"
+    if space_per_pedestrian >= 3.7:
+        return "B"
+    if space_per_pedestrian >= 2.2:
+        return "C"
+    if space_per_pedestrian >= 1.4:
+        return "D"
+    if space_per_pedestrian >= 0.75:
+        return "E"
+    return "F"
+
+
+def _ptsi_los_description(los: Optional[str]) -> Optional[str]:
+    if los is None:
+        return None
+    return PTSI_LOS_DESCRIPTIONS.get(los)
+
+
+def _ptsi_los_rank(los: Optional[str]) -> Optional[int]:
+    if los is None:
+        return None
+    return PTSI_LOS_RANKS.get(los)
+
+
+def _ptsi_los_from_rank(rank: Optional[int]) -> Optional[str]:
+    if rank is None:
+        return None
+    clamped_rank = min(max(int(rank), 0), max(PTSI_LOS_BY_RANK))
+    return PTSI_LOS_BY_RANK.get(clamped_rank)
+
+
+def _ptsi_los_state(los: Optional[str], has_footage: bool, has_occlusion_data: bool) -> str:
+    if not has_footage:
+        return "no-footage"
+    if not has_occlusion_data or los is None:
+        return "no-data"
+    return PTSI_LOS_STATE_MAP.get(los, "no-data")
+
+
+def _ptsi_los_from_score(score: Optional[float]) -> Optional[str]:
+    if score is None:
+        return None
+    if score < 15:
+        return "A"
+    if score < 33:
+        return "B"
+    if score < 50:
+        return "C"
+    if score < 66:
+        return "D"
+    if score < 85:
+        return "E"
+    return "F"
+
+
+def _ptsi_space_per_pedestrian(visible_count: int, walkable_area_m2: Optional[float]) -> Optional[float]:
+    if visible_count <= 0 or walkable_area_m2 is None or walkable_area_m2 <= 0:
+        return None
+    return walkable_area_m2 / float(visible_count)
+
+
+def _ptsi_score_breakdown(visible_count: int, location: dict[str, Any], occlusion_value: float) -> dict[str, Any]:
+    mode = _location_ptsi_mode(location)
+    walkable_area_m2 = _location_walkable_area_m2(location)
+    roi_area_ratio = _location_roi_area_ratio(location)
+    capacity_proxy: Optional[float] = None
+    space_per_pedestrian: Optional[float] = None
+    los: Optional[str] = None
+
     if visible_count <= 0:
-        return 0.0
-
-    if _location_ptsi_mode(location) == "strict-fhwa":
-        congestion_score = _ptsi_congestion_score(visible_count, _location_walkable_area_m2(location))
+        congestion_score = 0.0
+        score = 0.0
+    elif mode == "strict-fhwa":
+        space_per_pedestrian = _ptsi_space_per_pedestrian(visible_count, walkable_area_m2)
+        los = _ptsi_los_from_space_per_pedestrian(space_per_pedestrian)
+        congestion_score = _ptsi_congestion_score(visible_count, walkable_area_m2)
+        score = 100.0 * ((PTSI_CONGESTION_WEIGHT * congestion_score) + (PTSI_OCCLUSION_WEIGHT * occlusion_value))
     else:
-        congestion_score = min(1.0, visible_count / _location_capacity_proxy(location))
+        capacity_proxy = max(1.0, math.sqrt(roi_area_ratio) * PTSI_ROI_TESTING_CAPACITY_PER_FULL_FRAME)
+        congestion_score = min(1.0, visible_count / capacity_proxy)
+        score = 100.0 * ((PTSI_CONGESTION_WEIGHT * congestion_score) + (PTSI_OCCLUSION_WEIGHT * occlusion_value))
+        los = _ptsi_los_from_score(score)
 
-    score = 100.0 * ((PTSI_CONGESTION_WEIGHT * congestion_score) + (PTSI_OCCLUSION_WEIGHT * occlusion_value))
-    return round(min(max(score, 0.0), 100.0), 2)
+    return {
+        "mode": mode,
+        "walkableAreaM2": walkable_area_m2,
+        "roiAreaRatio": round(roi_area_ratio, 6),
+        "capacityProxy": round(capacity_proxy, 3) if capacity_proxy is not None else None,
+        "congestionScore": round(congestion_score, 4),
+        "occlusionValue": round(occlusion_value, 4),
+        "spacePerPedestrian": round(space_per_pedestrian, 3) if space_per_pedestrian is not None else None,
+        "los": los,
+        "losDescription": _ptsi_los_description(los),
+        "score": round(min(max(score, 0.0), 100.0), 2),
+    }
+
+
+def _ptsi_score(visible_count: int, location: dict[str, Any], occlusion_value: float) -> float:
+    return float(_ptsi_score_breakdown(visible_count, location, occlusion_value)["score"])
 
 
 def _severity_state(score: Optional[float], has_footage: bool, has_occlusion_data: bool) -> str:
@@ -1456,9 +1589,9 @@ def _severity_state(score: Optional[float], has_footage: bool, has_occlusion_dat
         return "no-footage"
     if not has_occlusion_data or score is None:
         return "no-data"
-    if score <= 32:
+    if score < 33:
         return "clear"
-    if score <= 65:
+    if score < 66:
         return "moderate"
     return "severe"
 
@@ -1613,7 +1746,21 @@ def dashboard_occlusion(date: Optional[str] = None, time_range: str = "whole-day
     locations_payload = []
     for location in state["locations"]:
         mode = _location_ptsi_mode(location)
+        walkable_area_m2 = _location_walkable_area_m2(location)
+        roi_area_ratio = _location_roi_area_ratio(location)
+        capacity_proxy = _location_capacity_proxy(location) if mode == "roi-testing" else None
         has_footage = location["id"] in active_location_ids
+
+        _ptsi_debug_log(
+            "location_config",
+            locationId=location["id"],
+            locationName=location["name"],
+            mode=mode,
+            walkableAreaM2=walkable_area_m2,
+            roiAreaRatio=round(roi_area_ratio, 6),
+            capacityProxy=round(capacity_proxy, 3) if capacity_proxy is not None else None,
+            hasFootage=has_footage,
+        )
 
         hourly_rollups: dict[str, dict[str, Any]] = {}
         total_visible = 0
@@ -1638,8 +1785,30 @@ def dashboard_occlusion(date: Optional[str] = None, time_range: str = "whole-day
                 + (heavy_count * PTSI_OCCLUSION_WEIGHTS[2])
             ) / (3.0 * visible_count)
 
-            second_score = _ptsi_score(visible_count, location, occlusion_value)
+            breakdown = _ptsi_score_breakdown(visible_count, location, occlusion_value)
+            second_score = float(breakdown["score"])
             hour_label = second_at.strftime("%H:00")
+
+            _ptsi_debug_log(
+                "second_score",
+                locationId=location["id"],
+                locationName=location["name"],
+                observedAt=second_at,
+                hour=hour_label,
+                visibleCount=visible_count,
+                lightCount=light_count,
+                moderateCount=moderate_count,
+                heavyCount=heavy_count,
+                occlusionValue=breakdown["occlusionValue"],
+                congestionScore=breakdown["congestionScore"],
+                capacityProxy=breakdown["capacityProxy"],
+                roiAreaRatio=breakdown["roiAreaRatio"],
+                walkableAreaM2=breakdown["walkableAreaM2"],
+                spacePerPedestrian=breakdown["spacePerPedestrian"],
+                los=breakdown["los"],
+                score=second_score,
+            )
+
             hour_rollup = hourly_rollups.setdefault(
                 hour_label,
                 {
@@ -1649,6 +1818,7 @@ def dashboard_occlusion(date: Optional[str] = None, time_range: str = "whole-day
                     "light": 0,
                     "moderate": 0,
                     "heavy": 0,
+                    "losRanks": [],
                     "trackKeys": set(),
                 },
             )
@@ -1658,6 +1828,9 @@ def dashboard_occlusion(date: Optional[str] = None, time_range: str = "whole-day
             hour_rollup["light"] += light_count
             hour_rollup["moderate"] += moderate_count
             hour_rollup["heavy"] += heavy_count
+            los_rank = _ptsi_los_rank(breakdown["los"])
+            if los_rank is not None:
+                hour_rollup["losRanks"].append(los_rank)
             hour_rollup["trackKeys"].update(track_occlusions.keys())
 
             total_visible += visible_count
@@ -1672,27 +1845,73 @@ def dashboard_occlusion(date: Optional[str] = None, time_range: str = "whole-day
             available_hours.add(hour_label)
             visible_total = int(rollup["visibleTotal"])
             sample_seconds = int(rollup["sampleSeconds"])
-            hourly_scores.append(
-                {
-                    "hour": hour_label,
-                    "score": round(_percentile(list(rollup["scores"]), 90), 2),
-                    "mode": mode,
-                    "averagePedestrians": round(visible_total / sample_seconds, 2) if sample_seconds else 0.0,
-                    "uniquePedestrians": len(rollup["trackKeys"]),
-                    "occlusionMix": _ptsi_occlusion_mix(
-                        int(rollup["light"]),
-                        int(rollup["moderate"]),
-                        int(rollup["heavy"]),
-                        visible_total,
-                    ),
-                }
+            hourly_score_value = round(_percentile(list(rollup["scores"]), 90), 2)
+            los_rank_values = [int(rank) for rank in rollup["losRanks"]]
+            hourly_los = _ptsi_los_from_score(hourly_score_value) if mode == "roi-testing" else _ptsi_los_from_rank(max(los_rank_values) if los_rank_values else None)
+            hourly_score = {
+                "hour": hour_label,
+                "score": hourly_score_value,
+                "mode": mode,
+                "averagePedestrians": round(visible_total / sample_seconds, 2) if sample_seconds else 0.0,
+                "uniquePedestrians": len(rollup["trackKeys"]),
+                "occlusionMix": _ptsi_occlusion_mix(
+                    int(rollup["light"]),
+                    int(rollup["moderate"]),
+                    int(rollup["heavy"]),
+                    visible_total,
+                ),
+                "los": hourly_los,
+                "losDescription": _ptsi_los_description(hourly_los),
+            }
+            hourly_scores.append(hourly_score)
+
+            _ptsi_debug_log(
+                "hour_rollup",
+                locationId=location["id"],
+                locationName=location["name"],
+                hour=hour_label,
+                sampleSeconds=sample_seconds,
+                visibleTotal=visible_total,
+                averagePedestrians=hourly_score["averagePedestrians"],
+                uniquePedestrians=hourly_score["uniquePedestrians"],
+                occlusionMix=hourly_score["occlusionMix"],
+                los=hourly_score["los"],
+                p90Score=hourly_score["score"],
             )
 
         has_occlusion_data = bool(hourly_scores)
-        overall_score = max((float(score["score"]) for score in hourly_scores), default=None)
         ranked_hours = sorted(hourly_scores, key=lambda score: (float(score["score"]), str(score["hour"])))
         peak_hour = ranked_hours[-1] if ranked_hours else None
-        off_peak_hour = ranked_hours[0] if ranked_hours else None
+        off_peak_hour = ranked_hours[0] if len(ranked_hours) > 1 else None
+        overall_score = float(peak_hour["score"]) if peak_hour else None
+        selected_mode = peak_hour["mode"] if peak_hour else mode
+        selected_average_pedestrians = peak_hour["averagePedestrians"] if peak_hour else None
+        selected_unique_pedestrians = peak_hour["uniquePedestrians"] if peak_hour else None
+        selected_occlusion_mix = peak_hour["occlusionMix"] if peak_hour else None
+        selected_los = peak_hour["los"] if peak_hour else None
+        selected_los_description = peak_hour["losDescription"] if peak_hour else None
+        state_label = _ptsi_los_state(selected_los, has_footage, has_occlusion_data)
+
+        _ptsi_debug_log(
+            "location_summary",
+            locationId=location["id"],
+            locationName=location["name"],
+            availableHours=[score["hour"] for score in hourly_scores],
+            peakHour=peak_hour["hour"] if peak_hour else None,
+            peakHourScore=float(peak_hour["score"]) if peak_hour else None,
+            offPeakHour=off_peak_hour["hour"] if off_peak_hour else None,
+            offPeakHourScore=float(off_peak_hour["score"]) if off_peak_hour else None,
+            score=overall_score,
+            mode=selected_mode,
+            averagePedestrians=selected_average_pedestrians,
+            uniquePedestrians=selected_unique_pedestrians,
+            occlusionMix=selected_occlusion_mix,
+            los=selected_los,
+            totalVisible=total_visible,
+            totalSampleSeconds=total_sample_seconds,
+            hasPTSIData=has_occlusion_data,
+            state=state_label,
+        )
 
         locations_payload.append(
             {
@@ -1703,11 +1922,13 @@ def dashboard_occlusion(date: Optional[str] = None, time_range: str = "whole-day
                 "hasFootage": has_footage,
                 "hasPTSIData": has_occlusion_data,
                 "score": overall_score,
-                "state": _severity_state(overall_score, has_footage, has_occlusion_data),
-                "mode": mode,
-                "averagePedestrians": round(total_visible / total_sample_seconds, 2) if total_sample_seconds else None,
-                "uniquePedestrians": len(unique_track_keys) if unique_track_keys else None,
-                "occlusionMix": _ptsi_occlusion_mix(total_light, total_moderate, total_heavy, total_visible) if total_visible else None,
+                "state": state_label,
+                "mode": selected_mode,
+                "averagePedestrians": selected_average_pedestrians,
+                "uniquePedestrians": selected_unique_pedestrians,
+                "occlusionMix": selected_occlusion_mix,
+                "los": selected_los,
+                "losDescription": selected_los_description,
                 "peakHour": peak_hour["hour"] if peak_hour else None,
                 "peakHourScore": float(peak_hour["score"]) if peak_hour else None,
                 "offPeakHour": off_peak_hour["hour"] if off_peak_hour else None,

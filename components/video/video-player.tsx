@@ -2,6 +2,7 @@
 
 import { useEffect, useRef } from "react"
 import { AlertCircle, MapPin, Users } from "lucide-react"
+import type { ROIConfiguration } from "@/lib/api"
 
 interface VideoPlayerProps {
   videoId: string
@@ -13,6 +14,8 @@ interface VideoPlayerProps {
   isProcessed: boolean
   videoRef?: { current: HTMLVideoElement | null }
   requestedSeek?: { seconds: number; token: number } | null
+  roiCoordinates?: ROIConfiguration | null
+  showROI?: boolean
   onTimeUpdate?: (seconds: number) => void
   onDurationChange?: (seconds: number) => void
 }
@@ -32,11 +35,14 @@ export function VideoPlayer({
   isProcessed,
   videoRef,
   requestedSeek,
+  roiCoordinates,
+  showROI = false,
   onTimeUpdate,
   onDurationChange,
 }: VideoPlayerProps) {
   const fallbackRef = useRef<HTMLVideoElement | null>(null)
   const resolvedRef = videoRef ?? fallbackRef
+  const roiPolygons = roiCoordinates?.includePolygonsNorm ?? []
 
   useEffect(() => {
     if (!src) {
@@ -78,17 +84,40 @@ export function VideoPlayer({
 
       {src ? (
         <div className="bg-black">
-          <video
-            key={src}
-            ref={resolvedRef}
-            src={src}
-            controls
-            playsInline
-            preload="metadata"
-            className="aspect-video w-full bg-black"
-            onLoadedMetadata={(event) => onDurationChange?.(Number.isFinite(event.currentTarget.duration) ? event.currentTarget.duration : 0)}
-            onTimeUpdate={(event) => onTimeUpdate?.(event.currentTarget.currentTime)}
-          />
+          <div className="relative aspect-video w-full bg-black">
+            <video
+              key={src}
+              ref={resolvedRef}
+              src={src}
+              controls
+              playsInline
+              preload="metadata"
+              className="aspect-video w-full bg-black"
+              onLoadedMetadata={(event) => onDurationChange?.(Number.isFinite(event.currentTarget.duration) ? event.currentTarget.duration : 0)}
+              onTimeUpdate={(event) => onTimeUpdate?.(event.currentTarget.currentTime)}
+            />
+            {showROI && roiPolygons.length > 0 && (
+              <svg
+                aria-hidden="true"
+                viewBox="0 0 1 1"
+                preserveAspectRatio="none"
+                className="pointer-events-none absolute inset-0 z-10 h-full w-full"
+              >
+                {roiPolygons.map((polygon, index) => (
+                  <polygon
+                    key={`roi-${index}`}
+                    points={polygon.map(([x, y]) => `${x},${y}`).join(" ")}
+                    fill="none"
+                    stroke="#39FF14"
+                    strokeWidth={0.004}
+                    strokeLinejoin="round"
+                    strokeLinecap="round"
+                    style={{ filter: "drop-shadow(0 0 6px rgba(57, 255, 20, 0.9))" }}
+                  />
+                ))}
+              </svg>
+            )}
+          </div>
         </div>
       ) : (
         <div className="flex aspect-video items-center justify-center gap-3 bg-secondary px-6 text-center text-muted-foreground">
