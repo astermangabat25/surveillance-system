@@ -9,13 +9,13 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
-import type { OcclusionLocation, OcclusionMapResponse, OcclusionState } from "@/lib/api"
+import type { PTSILocation, PTSIMapResponse, PTSIState } from "@/lib/api"
 import { Clock, Info, Loader2 } from "lucide-react"
 
 interface OcclusionMapProps {
   hourFilter: string
   onHourFilterChange: (hour: string) => void
-  data?: OcclusionMapResponse | null
+  data?: PTSIMapResponse | null
   loading?: boolean
 }
 
@@ -37,7 +37,7 @@ interface Rect {
 }
 
 type LabelDirection = "top" | "bottom" | "left" | "right" | "top-left" | "top-right" | "bottom-left" | "bottom-right"
-type PlottedLocation = OcclusionLocation & { shortLabel: string; position: MapPoint }
+type PlottedLocation = PTSILocation & { shortLabel: string; position: MapPoint }
 
 const DEFAULT_MAP_DIMENSIONS: MapDimensions = { width: 720, height: 288 }
 const MAP_LABEL_MIN_WIDTH = 52
@@ -59,7 +59,7 @@ function formatHourLabel(hour: string) {
   return `${displayHours}:${String(minutes).padStart(2, "0")} ${suffix}`
 }
 
-function resolveHourlyScore(location: OcclusionLocation, hourFilter: string) {
+function resolveHourlyScore(location: PTSILocation, hourFilter: string) {
   if (hourFilter === "all") {
     return location.score ?? null
   }
@@ -67,7 +67,7 @@ function resolveHourlyScore(location: OcclusionLocation, hourFilter: string) {
   return location.hourlyScores.find((item) => item.hour === hourFilter)?.score ?? null
 }
 
-function resolveState(location: OcclusionLocation, hourFilter: string): OcclusionState {
+function resolveState(location: PTSILocation, hourFilter: string): PTSIState {
   if (hourFilter === "all") {
     return location.state
   }
@@ -88,7 +88,7 @@ function resolveState(location: OcclusionLocation, hourFilter: string): Occlusio
   return "severe"
 }
 
-function getSeverityVisual(state: OcclusionState) {
+function getSeverityVisual(state: PTSIState) {
   switch (state) {
     case "clear":
       return { bg: "#FACC15", glow: "rgba(250, 204, 21, 0.38)", shadow: "0 0 22px 8px rgba(250, 204, 21, 0.28)", border: "rgba(254, 249, 195, 0.95)", size: 38 }
@@ -103,16 +103,16 @@ function getSeverityVisual(state: OcclusionState) {
   }
 }
 
-function describeState(state: OcclusionState, score: number | null) {
+function describeState(state: PTSIState, score: number | null) {
   if (state === "no-footage") {
     return "No footage for this location in the selected date range"
   }
   if (state === "no-data") {
-    return "Footage exists, but no occlusion-class detections are available yet"
+    return "Footage exists, but no ROI-qualified pedestrian tracks are available yet"
   }
 
-  const label = state === "clear" ? "Soft Yellow Glow" : state === "moderate" ? "Vibrant Orange Glow" : "Intense Red Glow"
-  return `${label} · OWDI ${score?.toFixed(1) ?? "0.0"}%`
+  const label = state === "clear" ? "Low severity" : state === "moderate" ? "Moderate severity" : "High severity"
+  return `${label} · PTSI ${score?.toFixed(1) ?? "0.0"}%`
 }
 
 function getTooltipPlacement(x: number, y: number): { style: CSSProperties; className: string } {
@@ -297,31 +297,31 @@ function buildLabelPlacements(plottedLocations: PlottedLocation[], mapDimensions
   ) as Record<string, { left: number; top: number }>
 }
 
-function getStateLabel(state: OcclusionState) {
+function getStateLabel(state: PTSIState) {
   switch (state) {
     case "clear":
-      return "Clear"
+      return "Low"
     case "moderate":
       return "Moderate"
     case "severe":
-      return "Severe"
+      return "High"
     case "no-data":
-      return "No data"
+      return "No PTSI data"
     default:
       return "No footage"
   }
 }
 
-function getStateSummary(state: OcclusionState, score: number | null) {
+function getStateSummary(state: PTSIState, score: number | null) {
   if (state === "no-footage") {
     return "No footage in selected range"
   }
 
   if (state === "no-data") {
-    return "Footage available, no occlusion data yet"
+    return "Footage available, but no ROI-qualified pedestrian traffic data yet"
   }
 
-  return `OWDI ${score?.toFixed(1) ?? "0.0"}%`
+  return `PTSI ${score?.toFixed(1) ?? "0.0"}%`
 }
 
 function LegendItem({ color, label, detail }: { color: string; label: string; detail: string }) {
@@ -418,19 +418,19 @@ export function OcclusionMap({ hourFilter, onHourFilterChange, data, loading = f
       <div className="mb-4 flex items-center justify-between gap-4">
         <div className="space-y-1">
           <div className="flex items-center gap-2">
-            <h3 className="text-base font-semibold text-foreground">Occlusion Severity Map</h3>
+            <h3 className="text-base font-semibold text-foreground">Pedestrian Traffic Severity Index Map</h3>
             <Tooltip>
               <TooltipTrigger asChild>
-                <button type="button" aria-label="Explain sustained peak density" className="rounded-full text-muted-foreground transition-colors hover:text-foreground">
+                <button type="button" aria-label="Explain the Pedestrian Traffic Severity Index" className="rounded-full text-muted-foreground transition-colors hover:text-foreground">
                   <Info className="h-4 w-4" />
                 </button>
               </TooltipTrigger>
               <TooltipContent side="bottom" sideOffset={8} className="max-w-72 rounded-xl px-3 py-2 text-xs">
-                Sustained Peak Density (90th Percentile) uses OWDI: (1×Light + 2×Moderate + 3×Heavy) ÷ (3×50) × 100. Locations with no footage stay neutral instead of glowing.
+                PTSI uses the 90th percentile of 100 × (0.85 × congestion + 0.15 × occlusion). Congestion follows FHWA/HCM-inspired space-per-pedestrian thresholds using ROI-qualified pedestrians and the configured walkable area.
               </TooltipContent>
             </Tooltip>
           </div>
-          <p className="text-sm text-muted-foreground">Sustained Peak Density (90th Percentile) by location</p>
+          <p className="text-sm text-muted-foreground">90th percentile PTSI by location</p>
         </div>
 
         <Select value={hourFilter} onValueChange={onHourFilterChange}>
@@ -473,7 +473,7 @@ export function OcclusionMap({ hourFilter, onHourFilterChange, data, loading = f
         {loading ? (
           <div className="relative z-10 flex h-full items-center justify-center text-sm text-slate-300">
             <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-            Calculating OWDI map...
+            Calculating PTSI map...
           </div>
         ) : (
           <>
@@ -564,7 +564,7 @@ export function OcclusionMap({ hourFilter, onHourFilterChange, data, loading = f
       </div>
 
       <div className="mt-4 rounded-2xl border border-border/60 bg-secondary/40 p-3 text-xs text-muted-foreground">
-        Map labels are shortened to keep names readable as more locations are added. Neutral markers mean there is either no footage for that location on the selected date or no occlusion-class detections available for the chosen hour.
+        Map labels are shortened to keep names readable as more locations are added. Neutral markers mean there is either no footage for that location on the selected date or no ROI-qualified pedestrian traffic data for the chosen hour.
       </div>
 
       {plottedLocations.length > 0 && (
@@ -625,10 +625,10 @@ export function OcclusionMap({ hourFilter, onHourFilterChange, data, loading = f
       )}
 
       <div className="mt-4 grid grid-cols-1 gap-3 border-t border-border pt-4 sm:grid-cols-2">
-        <LegendItem color="#FACC15" label="Soft Yellow Glow" detail="0–32% · clear flow and normal spacing" />
-        <LegendItem color="#F97316" label="Vibrant Orange Glow" detail="33–65% · moderate crowding and dense clusters" />
-        <LegendItem color="#EF4444" label="Intense Red Glow" detail="66–100% · severe bottleneck and packed heavy occlusion" />
-        <LegendItem color="#64748B" label="Neutral Marker" detail="No footage or no occlusion-class data" />
+        <LegendItem color="#FACC15" label="Low severity" detail="0–32% · comfortable pedestrian flow" />
+        <LegendItem color="#F97316" label="Moderate severity" detail="33–65% · denser flow and reduced spacing" />
+        <LegendItem color="#EF4444" label="High severity" detail="66–100% · likely bottleneck and crowding" />
+        <LegendItem color="#64748B" label="Neutral marker" detail="No footage or no ROI-qualified PTSI data" />
       </div>
     </div>
   )

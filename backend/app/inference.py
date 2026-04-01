@@ -21,6 +21,22 @@ TRACK_THUMBNAIL_MAX_EDGE = 224
 CLOCK_TIME_FORMATS = ("%H:%M", "%H:%M:%S", "%I:%M %p", "%I:%M:%S %p")
 
 
+def _foot_point_norm(bounds: tuple[int, int, int, int], frame_image: Any) -> Optional[list[float]]:
+    shape = getattr(frame_image, "shape", None)
+    if not shape or len(shape) < 2:
+        return None
+
+    frame_height = int(shape[0])
+    frame_width = int(shape[1])
+    if frame_width <= 0 or frame_height <= 0:
+        return None
+
+    x1, _y1, x2, y2 = bounds
+    foot_x = min(max(((x1 + x2) / 2.0) / float(frame_width), 0.0), 1.0)
+    foot_y = min(max(y2 / float(frame_height), 0.0), 1.0)
+    return [round(foot_x, 6), round(foot_y, 6)]
+
+
 def _vendored_ultralytics_dir() -> Path:
     return store.BACKEND_DIR / "vendor" / "ultralytics"
 
@@ -568,6 +584,7 @@ def run_video_inference(
                     "appearanceSummary": "Representative pedestrian track with limited appearance detail.",
                     "occlusionClass": occlusion_class,
                     "bestArea": 0.0,
+                    "footPointNorm": None,
                 }
                 pedestrian_tracks[track_id] = track_summary
             else:
@@ -581,6 +598,9 @@ def run_video_inference(
 
             bounds = _box_xyxy(box)
             if bounds is not None and frame_image is not None:
+                foot_point_norm = _foot_point_norm(bounds, frame_image)
+                if foot_point_norm is not None:
+                    track_summary["footPointNorm"] = foot_point_norm
                 crop, crop_area = _crop_frame(frame_image, bounds)
                 if crop is not None and crop_area > float(track_summary.get("bestArea") or 0.0):
                     track_summary["bestArea"] = crop_area

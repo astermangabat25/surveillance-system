@@ -353,6 +353,15 @@ async def upload_video(
             handle_processing_progress,
         )
         ensure_not_cancelled()
+        if uploadId:
+            store.set_upload_status(
+                uploadId,
+                state="processing",
+                progress_percent=95,
+                message="Calculating Pedestrian Traffic Severity Index...",
+                phase="ptsi",
+                video_id=video["id"],
+            )
         response = store.set_video_inference_result(
             video_id=video["id"],
             pedestrian_count=result.get("pedestrianCount", 0),
@@ -414,7 +423,7 @@ def get_dashboard_traffic(
     return store.dashboard_traffic(date, timeRange, focusTime, zoomLevel)
 
 
-@app.get("/api/dashboard/occlusion-trends", response_model=schemas.OcclusionTrendResponse)
+@app.get("/api/dashboard/occlusion-trends", response_model=schemas.PTSITrendResponse)
 def get_dashboard_occlusion_trends(
     date: Optional[str] = None,
     timeRange: str = "whole-day",
@@ -424,7 +433,7 @@ def get_dashboard_occlusion_trends(
     return store.dashboard_occlusion_trends(date, timeRange, focusTime, zoomLevel)
 
 
-@app.get("/api/dashboard/occlusion", response_model=schemas.OcclusionMapResponse)
+@app.get("/api/dashboard/occlusion", response_model=schemas.PTSIMapResponse)
 def get_dashboard_occlusion(date: Optional[str] = None, timeRange: str = "whole-day") -> dict[str, object]:
     return store.dashboard_occlusion(date, timeRange)
 

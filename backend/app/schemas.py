@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Literal, Optional
+from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -22,6 +22,8 @@ class LocationCreate(BaseModel):
     longitude: float
     description: str = ""
     address: str = ""
+    roiCoordinates: Optional[dict[str, Any]] = None
+    walkableAreaM2: Optional[float] = None
 
 
 class LocationRecord(LocationCreate):
@@ -91,7 +93,7 @@ class TrafficResponse(BaseModel):
     locationTotals: list[LocationTotal] = Field(default_factory=list)
 
 
-class OcclusionTrendResponse(BaseModel):
+class PTSITrendResponse(BaseModel):
     timeRange: str
     series: list[dict[str, object]] = Field(default_factory=list)
     bucketMinutes: int = 60
@@ -103,27 +105,33 @@ class OcclusionTrendResponse(BaseModel):
     windowEnd: Optional[str] = None
 
 
-class OcclusionHourScore(BaseModel):
+class PTSIHourScore(BaseModel):
     hour: str
     score: float
 
 
-class OcclusionLocation(BaseModel):
+class PTSILocation(BaseModel):
     id: str
     name: str
     latitude: float
     longitude: float
     hasFootage: bool
-    hasOcclusionData: bool
+    hasPTSIData: bool
     score: Optional[float] = None
     state: Literal["clear", "moderate", "severe", "no-footage", "no-data"]
-    hourlyScores: list[OcclusionHourScore] = Field(default_factory=list)
+    hourlyScores: list[PTSIHourScore] = Field(default_factory=list)
 
 
-class OcclusionMapResponse(BaseModel):
+class PTSIMapResponse(BaseModel):
     timeRange: str
     availableHours: list[str] = Field(default_factory=list)
-    locations: list[OcclusionLocation] = Field(default_factory=list)
+    locations: list[PTSILocation] = Field(default_factory=list)
+
+
+OcclusionTrendResponse = PTSITrendResponse
+OcclusionHourScore = PTSIHourScore
+OcclusionLocation = PTSILocation
+OcclusionMapResponse = PTSIMapResponse
 
 
 class AIBadge(BaseModel):
@@ -186,7 +194,7 @@ class VideoUploadStatus(BaseModel):
     state: Literal["queued", "processing", "complete", "error", "cancelled"]
     progressPercent: Optional[int] = None
     message: str
-    phase: Optional[Literal["queued", "tracking", "vision", "finalizing"]] = None
+    phase: Optional[Literal["queued", "tracking", "vision", "ptsi", "finalizing"]] = None
     videoId: Optional[str] = None
     error: Optional[str] = None
     updatedAt: str

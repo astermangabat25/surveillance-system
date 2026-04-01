@@ -6,6 +6,7 @@ import { PedestrianChart } from "@/components/dashboard/pedestrian-chart"
 import { OcclusionTrendsChart } from "../../components/dashboard/occlusion-trends-chart"
 import { OcclusionMap } from "@/components/dashboard/occlusion-map"
 import { AISynthesis } from "@/components/dashboard/ai-synthesis"
+import { useUploadQueue } from "@/components/uploads/upload-queue-provider"
 import { Button } from "@/components/ui/button"
 import { FootageDatePicker } from "@/components/ui/footage-date-picker"
 import {
@@ -37,12 +38,13 @@ import {
   type AISynthesisResponse,
   type DashboardSummary,
   type ModelInfo,
-  type OcclusionMapResponse,
-  type OcclusionTrendResponse,
+  type PTSIMapResponse,
+  type PTSITrendResponse,
   type TrafficResponse,
 } from "@/lib/api"
 
 export default function DashboardPage() {
+  const { settledUploadsVersion } = useUploadQueue()
   const [selectedDate, setSelectedDate] = useState("2026-03-15")
   const [timeRange, setTimeRange] = useState("whole-day")
   const [hourFilter, setHourFilter] = useState("all")
@@ -52,8 +54,8 @@ export default function DashboardPage() {
   const [modelFile, setModelFile] = useState<File | null>(null)
   const [summary, setSummary] = useState<DashboardSummary | null>(null)
   const [traffic, setTraffic] = useState<TrafficResponse | null>(null)
-  const [occlusionTrends, setOcclusionTrends] = useState<OcclusionTrendResponse | null>(null)
-  const [occlusion, setOcclusion] = useState<OcclusionMapResponse | null>(null)
+  const [occlusionTrends, setOcclusionTrends] = useState<PTSITrendResponse | null>(null)
+  const [occlusion, setOcclusion] = useState<PTSIMapResponse | null>(null)
   const [synthesis, setSynthesis] = useState<AISynthesisResponse | null>(null)
   const [footageDates, setFootageDates] = useState<string[]>([])
   const [modelInfo, setModelInfo] = useState<ModelInfo | null>(null)
@@ -127,6 +129,15 @@ export default function DashboardPage() {
   useEffect(() => {
     void loadFootageDates()
   }, [loadFootageDates])
+
+  useEffect(() => {
+    if (settledUploadsVersion === 0) {
+      return
+    }
+
+    void loadDashboard()
+    void loadFootageDates()
+  }, [loadDashboard, loadFootageDates, settledUploadsVersion])
 
   useEffect(() => {
     if (hourFilter !== "all" && !occlusion?.availableHours.includes(hourFilter)) {

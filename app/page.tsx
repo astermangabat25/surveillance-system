@@ -39,6 +39,7 @@ import {
   getEvents,
   getLocations,
   type EventRecord,
+  type LocationPayload,
   type LocationRecord,
   updateLocation,
 } from "@/lib/api"
@@ -180,13 +181,7 @@ export default function SurveillancePage() {
     }, 0)
   }
 
-  const handleSaveLocation = async (data: {
-    name: string
-    latitude: number
-    longitude: number
-    description: string
-    address: string
-  }) => {
+  const handleSaveLocation = async (data: LocationPayload) => {
     try {
       setPageError(null)
       if (editingLocation) {

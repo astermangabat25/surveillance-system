@@ -21,8 +21,21 @@ DATA_FILE = STORAGE_DIR / "dev_data.json"
 CLOCK_TIME_FORMATS = ("%H:%M", "%H:%M:%S", "%I:%M %p", "%I:%M:%S %p")
 MIN_DRILLDOWN_BUCKET_MINUTES = 5
 OWDI_CLASS_WEIGHTS = {0: 1, 1: 2, 2: 3}
-OWDI_MAX_WEIGHT = 3
-OWDI_CAPACITY = 50
+PTSI_OCCLUSION_SCORES = {0: 0.0, 1: 0.5, 2: 1.0}
+PTSI_CLEAR_SPACE_M2 = 5.6
+PTSI_SEVERE_SPACE_M2 = 0.75
+PTSI_CONGESTION_WEIGHT = 0.85
+PTSI_OCCLUSION_WEIGHT = 0.15
+LOCATION_PERSISTED_FIELDS = (
+    "id",
+    "name",
+    "latitude",
+    "longitude",
+    "description",
+    "address",
+    "roiCoordinates",
+    "walkableAreaM2",
+)
 SEARCH_STOPWORDS = {
     "a",
     "an",
@@ -229,6 +242,10 @@ def _ensure_location_name_is_unique(state: dict[str, Any], name: str, exclude_id
             raise ValueError("A location with that name already exists")
 
 
+def _location_payload(location: dict[str, Any]) -> dict[str, Any]:
+    return {field: location.get(field) for field in LOCATION_PERSISTED_FIELDS}
+
+
 def seed_state() -> dict[str, Any]:
     return {
         "model": {"currentModel": "yolov8n-bytetrack.pt", "uploadedAt": None},
@@ -335,7 +352,7 @@ def add_location(payload: dict[str, Any]) -> dict[str, Any]:
 
     location_id = slugify(payload["name"])
     location = {**payload, "id": location_id}
-    state["locations"].append({key: location[key] for key in ("id", "name", "latitude", "longitude", "description", "address")})
+    state["locations"].append(_location_payload(location))
     save_state(state)
     return _location_record(state, location_id)
 
@@ -356,6 +373,8 @@ def update_location(location_id: str, payload: dict[str, Any]) -> dict[str, Any]
             "longitude": payload["longitude"],
             "description": payload.get("description", ""),
             "address": payload.get("address", ""),
+            "roiCoordinates": payload.get("roiCoordinates"),
+            "walkableAreaM2": payload.get("walkableAreaM2"),
         }
     )
 
@@ -645,6 +664,122 @@ def _pedestrian_track_timestamp(track: dict[str, Any], video: dict[str, Any]) ->
     except (TypeError, ValueError):
         return observed_at
     return observed_at + timedelta(seconds=offset_seconds)
+
+
+def _pedestrian_track_end_timestamp(track: dict[str, Any], video: dict[str, Any]) -> Optional[datetime]:
+    track_time = _combine_date_and_time(str(video.get("date", "")), track.get("lastTimestamp") or track.get("bestTimestamp") or track.get("firstTimestamp"))
+    if track_time is not None:
+        return track_time
+
+    observed_at = _observation_time(video)
+    if observed_at is None:
+        return None
+
+    try:
+        offset_seconds = float(track.get("lastOffsetSeconds"))
+    except (TypeError, ValueError):
+        return _pedestrian_track_timestamp(track, video)
+    return observed_at + timedelta(seconds=offset_seconds)
+
+
+def _normalized_foot_point(track: dict[str, Any]) -> Optional[tuple[float, float]]:
+    raw_point = track.get("footPointNorm")
+    if not isinstance(raw_point, (list, tuple)) or len(raw_point) < 2:
+        return None
+
+    try:
+        x_value = float(raw_point[0])
+        y_value = float(raw_point[1])
+    except (TypeError, ValueError):
+        return None
+
+    if not (0.0 <= x_value <= 1.0 and 0.0 <= y_value <= 1.0):
+        return None
+    return (x_value, y_value)
+
+
+def _normalized_roi_polygons(location: dict[str, Any]) -> list[list[tuple[float, float]]]:
+    roi_coordinates = location.get("roiCoordinates")
+    if not isinstance(roi_coordinates, dict):
+        return []
+
+    raw_polygons = roi_coordinates.get("includePolygonsNorm")
+    if not isinstance(raw_polygons, list):
+        return []
+
+    polygons: list[list[tuple[float, float]]] = []
+    for raw_polygon in raw_polygons:
+        if not isinstance(raw_polygon, list):
+            continue
+
+        polygon: list[tuple[float, float]] = []
+        for raw_point in raw_polygon:
+            if not isinstance(raw_point, (list, tuple)) or len(raw_point) < 2:
+                polygon = []
+                break
+            try:
+                point = (float(raw_point[0]), float(raw_point[1]))
+            except (TypeError, ValueError):
+                polygon = []
+                break
+            polygon.append(point)
+
+        if len(polygon) >= 3:
+            polygons.append(polygon)
+
+    return polygons
+
+
+def _point_on_segment(point: tuple[float, float], start: tuple[float, float], end: tuple[float, float]) -> bool:
+    x_value, y_value = point
+    x1, y1 = start
+    x2, y2 = end
+    cross_product = (x_value - x1) * (y2 - y1) - (y_value - y1) * (x2 - x1)
+    if abs(cross_product) > 1e-9:
+        return False
+    return (
+        min(x1, x2) - 1e-9 <= x_value <= max(x1, x2) + 1e-9
+        and min(y1, y2) - 1e-9 <= y_value <= max(y1, y2) + 1e-9
+    )
+
+
+def _point_in_polygon(point: tuple[float, float], polygon: list[tuple[float, float]]) -> bool:
+    inside = False
+    previous_point = polygon[-1]
+    for current_point in polygon:
+        if _point_on_segment(point, previous_point, current_point):
+            return True
+
+        x_value, y_value = point
+        x1, y1 = previous_point
+        x2, y2 = current_point
+        intersects = ((y1 > y_value) != (y2 > y_value)) and (
+            x_value < ((x2 - x1) * (y_value - y1) / ((y2 - y1) or 1e-12)) + x1
+        )
+        if intersects:
+            inside = not inside
+        previous_point = current_point
+    return inside
+
+
+def _track_in_location_roi(track: dict[str, Any], location: dict[str, Any]) -> bool:
+    polygons = _normalized_roi_polygons(location)
+    if not polygons:
+        return True
+
+    foot_point = _normalized_foot_point(track)
+    if foot_point is None:
+        return False
+    return any(_point_in_polygon(foot_point, polygon) for polygon in polygons)
+
+
+def _location_walkable_area_m2(location: dict[str, Any]) -> Optional[float]:
+    raw_area = location.get("walkableAreaM2")
+    try:
+        area_value = float(raw_area)
+    except (TypeError, ValueError):
+        return None
+    return area_value if area_value > 0 else None
 
 
 def _resolve_root_window(
@@ -1110,10 +1245,23 @@ def _percentile(values: list[float], percentile: float) -> float:
     return lower_value + ((upper_value - lower_value) * fraction)
 
 
-def _owdi_score(class_counts: dict[int, int]) -> float:
-    weighted_sum = sum(OWDI_CLASS_WEIGHTS[class_id] * count for class_id, count in class_counts.items())
-    score = (weighted_sum / float(OWDI_MAX_WEIGHT * OWDI_CAPACITY)) * 100.0
-    return round(min(score, 100.0), 2)
+def _ptsi_congestion_score(visible_count: int, walkable_area_m2: Optional[float]) -> float:
+    if visible_count <= 0 or walkable_area_m2 is None:
+        return 0.0
+
+    space_per_pedestrian = walkable_area_m2 / float(visible_count)
+    if space_per_pedestrian <= PTSI_SEVERE_SPACE_M2:
+        return 1.0
+    if space_per_pedestrian >= PTSI_CLEAR_SPACE_M2:
+        return 0.0
+
+    return (PTSI_CLEAR_SPACE_M2 - space_per_pedestrian) / (PTSI_CLEAR_SPACE_M2 - PTSI_SEVERE_SPACE_M2)
+
+
+def _ptsi_score(visible_count: int, walkable_area_m2: Optional[float], occlusion_value: float) -> float:
+    congestion_score = _ptsi_congestion_score(visible_count, walkable_area_m2)
+    score = 100.0 * ((PTSI_CONGESTION_WEIGHT * congestion_score) + (PTSI_OCCLUSION_WEIGHT * occlusion_value))
+    return round(min(max(score, 0.0), 100.0), 2)
 
 
 def _severity_state(score: Optional[float], has_footage: bool, has_occlusion_data: bool) -> str:
@@ -1212,9 +1360,15 @@ def dashboard_occlusion_trends(
 def dashboard_occlusion(date: Optional[str] = None, time_range: str = "whole-day") -> dict[str, Any]:
     state, resolved_date, videos, events = _filtered_dashboard_records(date)
     videos_by_id = {video["id"]: video for video in videos}
+    locations_by_id = {location["id"]: location for location in state["locations"]}
+    pedestrian_tracks = _filtered_pedestrian_tracks(state, videos)
     observation_times = [
         timestamp
-        for timestamp in (_event_timestamp(event, videos_by_id[event.get("videoId")]) for event in events if event.get("videoId") in videos_by_id)
+        for timestamp in (
+            _pedestrian_track_timestamp(track, videos_by_id[track.get("videoId")])
+            for track in pedestrian_tracks
+            if track.get("videoId") in videos_by_id
+        )
         if timestamp is not None
     ]
     if not observation_times:
@@ -1224,30 +1378,57 @@ def dashboard_occlusion(date: Optional[str] = None, time_range: str = "whole-day
     window_start = buckets[0][1] if buckets else datetime.strptime(resolved_date, "%Y-%m-%d")
     window_end = (buckets[-1][1] + bucket_span) if buckets else (window_start + timedelta(days=1))
 
-    minute_class_counts: dict[str, dict[datetime, dict[int, int]]] = {}
-    for event in events:
-        video = videos_by_id.get(event.get("videoId") or "")
+    minute_metrics: dict[str, dict[datetime, dict[str, Union[int, float]]]] = {}
+    for track in pedestrian_tracks:
+        video = videos_by_id.get(track.get("videoId") or "")
         if video is None:
             continue
-        occlusion_class = _event_occlusion_class(event)
-        if occlusion_class is None:
-            continue
-        observed_at = _event_timestamp(event, video)
-        if observed_at is None or observed_at < window_start or observed_at >= window_end:
+
+        location = locations_by_id.get(video["locationId"])
+        if location is None or not _track_in_location_roi(track, location):
             continue
 
-        minute_bucket = observed_at.replace(second=0, microsecond=0)
-        location_minutes = minute_class_counts.setdefault(video["locationId"], {})
-        class_counts = location_minutes.setdefault(minute_bucket, {0: 0, 1: 0, 2: 0})
-        class_counts[occlusion_class] += 1
+        track_start = _pedestrian_track_timestamp(track, video)
+        track_end = _pedestrian_track_end_timestamp(track, video)
+        if track_start is None or track_end is None:
+            continue
+        if track_end < track_start:
+            track_end = track_start
+
+        try:
+            occlusion_class = int(track.get("occlusionClass"))
+        except (TypeError, ValueError):
+            occlusion_class = 0
+        occlusion_value = PTSI_OCCLUSION_SCORES.get(occlusion_class, 0.0)
+
+        minute_bucket = track_start.replace(second=0, microsecond=0)
+        final_minute_bucket = track_end.replace(second=0, microsecond=0)
+        while minute_bucket <= final_minute_bucket:
+            if window_start <= minute_bucket < window_end:
+                location_minutes = minute_metrics.setdefault(video["locationId"], {})
+                minute_entry = location_minutes.setdefault(minute_bucket, {"visibleCount": 0, "occlusionValue": 0.0})
+                minute_entry["visibleCount"] = int(minute_entry["visibleCount"]) + 1
+                minute_entry["occlusionValue"] = max(float(minute_entry["occlusionValue"]), occlusion_value)
+            minute_bucket += timedelta(minutes=1)
 
     hourly_scores_by_location: dict[str, list[dict[str, Union[str, float]]]] = {}
     available_hours: set[str] = set()
-    for location_id, minute_scores in minute_class_counts.items():
+    for location_id, minute_scores in minute_metrics.items():
+        location = locations_by_id.get(location_id)
+        if location is None:
+            continue
+
+        walkable_area_m2 = _location_walkable_area_m2(location)
         per_hour_scores: dict[str, list[float]] = {}
-        for minute_bucket, class_counts in minute_scores.items():
+        for minute_bucket, minute_entry in minute_scores.items():
             hour_label = minute_bucket.strftime("%H:00")
-            per_hour_scores.setdefault(hour_label, []).append(_owdi_score(class_counts))
+            per_hour_scores.setdefault(hour_label, []).append(
+                _ptsi_score(
+                    int(minute_entry["visibleCount"]),
+                    walkable_area_m2,
+                    float(minute_entry["occlusionValue"]),
+                )
+            )
 
         location_hourly_scores = [
             {"hour": hour_label, "score": round(_percentile(scores, 90), 2)}
@@ -1270,7 +1451,7 @@ def dashboard_occlusion(date: Optional[str] = None, time_range: str = "whole-day
                 "latitude": location["latitude"],
                 "longitude": location["longitude"],
                 "hasFootage": has_footage,
-                "hasOcclusionData": has_occlusion_data,
+                "hasPTSIData": has_occlusion_data,
                 "score": overall_score,
                 "state": _severity_state(overall_score, has_footage, has_occlusion_data),
                 "hourlyScores": hourly_scores,

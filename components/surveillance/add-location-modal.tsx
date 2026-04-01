@@ -11,8 +11,9 @@ import {
 } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { Textarea } from "@/components/ui/textarea"
 import { MapPin, Search, Loader2 } from "lucide-react"
-import { searchLocations } from "@/lib/api"
+import { searchLocations, type LocationPayload, type ROIConfiguration } from "@/lib/api"
 
 const SEARCHABLE_LOCATIONS: Array<{
   aliases: string[]
@@ -66,19 +67,78 @@ function findFallbackMatch(normalizedQuery: string) {
   return SEARCHABLE_LOCATIONS.find(({ aliases }) => aliases.some((alias) => normalizedQuery.includes(alias) || alias.includes(normalizedQuery)))
 }
 
-interface LocationFormData {
-  name: string
-  latitude: number
-  longitude: number
-  description: string
-  address: string
+function parseROIConfiguration(value: string): ROIConfiguration | null {
+  const trimmed = value.trim()
+  if (!trimmed) {
+    return null
+  }
+
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(trimmed)
+  } catch {
+    throw new Error("ROI JSON must be valid JSON.")
+  }
+
+  if (!parsed || typeof parsed !== "object") {
+    throw new Error("ROI JSON must be an object.")
+  }
+
+  const record = parsed as Record<string, unknown>
+  const referenceSize = record.referenceSize
+  const includePolygonsNorm = record.includePolygonsNorm
+
+  if (
+    !Array.isArray(referenceSize) ||
+    referenceSize.length !== 2 ||
+    referenceSize.some((entry) => typeof entry !== "number" || !Number.isFinite(entry) || entry <= 0)
+  ) {
+    throw new Error("ROI JSON must include a numeric referenceSize like [1920, 1080].")
+  }
+
+  if (!Array.isArray(includePolygonsNorm) || includePolygonsNorm.length === 0) {
+    throw new Error("ROI JSON must include at least one polygon in includePolygonsNorm.")
+  }
+
+  const polygons = includePolygonsNorm.map((polygon) => {
+    if (!Array.isArray(polygon) || polygon.length < 3) {
+      throw new Error("Each ROI polygon must contain at least 3 normalized points.")
+    }
+
+    return polygon.map((point) => {
+      if (!Array.isArray(point) || point.length !== 2) {
+        throw new Error("Each ROI point must be a two-number array like [0.25, 0.98].")
+      }
+
+      const [x, y] = point
+      if (
+        typeof x !== "number" ||
+        typeof y !== "number" ||
+        !Number.isFinite(x) ||
+        !Number.isFinite(y) ||
+        x < 0 ||
+        x > 1 ||
+        y < 0 ||
+        y > 1
+      ) {
+        throw new Error("ROI points must use normalized coordinates between 0 and 1.")
+      }
+
+      return [x, y] as [number, number]
+    })
+  })
+
+  return {
+    referenceSize: [referenceSize[0] as number, referenceSize[1] as number],
+    includePolygonsNorm: polygons,
+  }
 }
 
 interface AddLocationModalProps {
   open: boolean
   onOpenChange: (open: boolean) => void
-  initialData?: LocationFormData | null
-  onSubmitLocation?: (data: LocationFormData) => void | Promise<void>
+  initialData?: LocationPayload | null
+  onSubmitLocation?: (data: LocationPayload) => void | Promise<void>
 }
 
 export function AddLocationModal({ open, onOpenChange, initialData = null, onSubmitLocation }: AddLocationModalProps) {
@@ -88,19 +148,25 @@ export function AddLocationModal({ open, onOpenChange, initialData = null, onSub
   const [description, setDescription] = useState("")
   const [searchQuery, setSearchQuery] = useState("")
   const [address, setAddress] = useState("")
+  const [walkableAreaM2, setWalkableAreaM2] = useState("")
+  const [roiCoordinatesText, setRoiCoordinatesText] = useState("")
   const [searchError, setSearchError] = useState<string | null>(null)
+  const [roiError, setRoiError] = useState<string | null>(null)
   const [isSearching, setIsSearching] = useState(false)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const isEditing = Boolean(initialData)
 
-  const resetForm = useCallback((nextData?: LocationFormData | null) => {
+  const resetForm = useCallback((nextData?: LocationPayload | null) => {
     setName(nextData?.name ?? "")
     setLatitude(nextData ? nextData.latitude.toString() : "")
     setLongitude(nextData ? nextData.longitude.toString() : "")
     setDescription(nextData?.description ?? "")
     setSearchQuery(nextData?.address ?? nextData?.name ?? "")
     setAddress(nextData?.address ?? "")
+    setWalkableAreaM2(nextData?.walkableAreaM2 != null ? nextData.walkableAreaM2.toString() : "")
+    setRoiCoordinatesText(nextData?.roiCoordinates ? JSON.stringify(nextData.roiCoordinates, null, 2) : "")
     setSearchError(null)
+    setRoiError(null)
   }, [])
 
   useEffect(() => {
@@ -156,6 +222,24 @@ export function AddLocationModal({ open, onOpenChange, initialData = null, onSub
   const handleSubmit = async () => {
     if (!name || !latitude || !longitude || isSubmitting) return
 
+    let parsedROI: ROIConfiguration | null = null
+    let parsedWalkableArea: number | null = null
+
+    try {
+      parsedROI = parseROIConfiguration(roiCoordinatesText)
+      setRoiError(null)
+
+      if (walkableAreaM2.trim()) {
+        parsedWalkableArea = Number.parseFloat(walkableAreaM2)
+        if (!Number.isFinite(parsedWalkableArea) || parsedWalkableArea <= 0) {
+          throw new Error("Walkable area must be a positive number in square meters.")
+        }
+      }
+    } catch (error) {
+      setRoiError(error instanceof Error ? error.message : "Invalid ROI configuration.")
+      return
+    }
+
     setIsSubmitting(true)
     try {
       await onSubmitLocation?.({
@@ -164,6 +248,8 @@ export function AddLocationModal({ open, onOpenChange, initialData = null, onSub
         longitude: parseFloat(longitude),
         description,
         address,
+        roiCoordinates: parsedROI,
+        walkableAreaM2: parsedWalkableArea,
       })
       handleClose()
     } finally {
@@ -196,7 +282,9 @@ export function AddLocationModal({ open, onOpenChange, initialData = null, onSub
             {isEditing ? "Edit Location" : "Add New Location"}
           </DialogTitle>
           <DialogDescription className="text-muted-foreground">
-            {isEditing ? "Update the location details and camera coordinates." : "Search for a place or enter GPS coordinates manually."}
+            {isEditing
+              ? "Update the location details, camera coordinates, ROI polygons, and walkable area."
+              : "Search for a place or enter GPS coordinates, ROI polygons, and walkable area manually."}
           </DialogDescription>
         </DialogHeader>
         
@@ -293,6 +381,32 @@ export function AddLocationModal({ open, onOpenChange, initialData = null, onSub
               onChange={(e) => setDescription(e.target.value)}
               className="bg-secondary border-border text-foreground placeholder:text-muted-foreground"
             />
+          </div>
+
+          <div className="space-y-2">
+            <label className="text-sm font-medium text-foreground">Walkable Area (m²)</label>
+            <Input
+              type="number"
+              step="0.01"
+              min="0"
+              placeholder="e.g., 42.5"
+              value={walkableAreaM2}
+              onChange={(e) => setWalkableAreaM2(e.target.value)}
+              className="bg-secondary border-border text-foreground placeholder:text-muted-foreground"
+            />
+            <p className="text-xs text-muted-foreground">Used for the congestion part of the Pedestrian Traffic Severity Index.</p>
+          </div>
+
+          <div className="space-y-2">
+            <label className="text-sm font-medium text-foreground">Pedestrian ROI JSON (Optional)</label>
+            <Textarea
+              placeholder='{"referenceSize":[1920,1080],"includePolygonsNorm":[[[0.24,0.98],[0.99,0.99],[0.22,0.09]]]}'
+              value={roiCoordinatesText}
+              onChange={(e) => setRoiCoordinatesText(e.target.value)}
+              className="min-h-32 bg-secondary font-mono text-xs border-border text-foreground placeholder:text-muted-foreground"
+            />
+            <p className="text-xs text-muted-foreground">Only pedestrian foot-points inside these normalized polygons will count toward PTSI.</p>
+            {roiError && <p className="text-xs text-destructive">{roiError}</p>}
           </div>
         </div>
 

@@ -331,6 +331,81 @@ def test_upload_video_status_endpoint_reports_processing_progress(monkeypatch, t
     assert final_status["videoId"] == final_upload_response.json()["id"]
 
 
+def test_upload_video_status_endpoint_reports_ptsi_phase_before_completion(monkeypatch, tmp_path: Path) -> None:
+    configure_temp_storage(monkeypatch, tmp_path)
+
+    monkeypatch.setattr(
+        inference,
+        "ultralytics_status",
+        lambda: {"installed": True, "modelExists": True, "ready": True, "currentModel": "best.pt"},
+    )
+
+    upload_id = "upload-ptsi-phase-check"
+    ptsi_phase_started = threading.Event()
+    allow_finish = threading.Event()
+    upload_response: dict[str, object] = {}
+    original_set_video_inference_result = store.set_video_inference_result
+
+    def fake_run_video_inference(video_path: Path, model_name=None, video_record=None, fast_mode: bool = False, progress_callback=None):
+        if progress_callback is not None:
+            progress_callback({"progressPercent": 60, "message": "Running detection and tracking..."})
+        return {"pedestrianCount": 1, "processedPath": None, "events": [], "pedestrianTracks": []}
+
+    def blocking_set_video_inference_result(*args, **kwargs):
+        ptsi_phase_started.set()
+        assert allow_finish.wait(timeout=3)
+        return original_set_video_inference_result(*args, **kwargs)
+
+    monkeypatch.setattr(inference, "run_video_inference", fake_run_video_inference)
+    monkeypatch.setattr(store, "set_video_inference_result", blocking_set_video_inference_result)
+
+    def perform_upload() -> None:
+        with TestClient(main.app) as client:
+            upload_response["response"] = client.post(
+                "/api/videos",
+                data={
+                    "locationId": "edsa-sec-walk",
+                    "date": "2026-03-17",
+                    "startTime": "10:00",
+                    "endTime": "10:01",
+                    "uploadId": upload_id,
+                },
+                files={"file": ("clip.mp4", b"fake-video-bytes", "video/mp4")},
+            )
+
+    upload_thread = threading.Thread(target=perform_upload)
+    upload_thread.start()
+
+    assert ptsi_phase_started.wait(timeout=3)
+
+    with TestClient(main.app) as client:
+        status_response = client.get(f"/api/videos/uploads/{upload_id}")
+
+    assert status_response.status_code == 200
+    status_body = status_response.json()
+    assert status_body["state"] == "processing"
+    assert status_body["progressPercent"] == 95
+    assert status_body["phase"] == "ptsi"
+    assert status_body["message"] == "Calculating Pedestrian Traffic Severity Index..."
+    assert status_body["videoId"] is not None
+
+    allow_finish.set()
+    upload_thread.join(timeout=3)
+    assert not upload_thread.is_alive()
+
+    final_upload_response = upload_response["response"]
+    assert final_upload_response.status_code == 201
+
+    with TestClient(main.app) as client:
+        final_status_response = client.get(f"/api/videos/uploads/{upload_id}")
+
+    assert final_status_response.status_code == 200
+    final_status = final_status_response.json()
+    assert final_status["state"] == "complete"
+    assert final_status["progressPercent"] == 100
+    assert final_status["videoId"] == final_upload_response.json()["id"]
+
+
 def test_cancel_upload_endpoint_marks_upload_for_cancellation(monkeypatch, tmp_path: Path) -> None:
     configure_temp_storage(monkeypatch, tmp_path)
 
@@ -485,6 +560,13 @@ def test_update_and_delete_location_cascade_to_related_records(monkeypatch, tmp_
                 "longitude": 121.08,
                 "description": "Updated camera view",
                 "address": "Updated address",
+                "roiCoordinates": {
+                    "referenceSize": [1920, 1080],
+                    "includePolygonsNorm": [
+                        [[0.2, 0.2], [0.5, 0.2], [0.5, 0.6], [0.2, 0.6]],
+                    ],
+                },
+                "walkableAreaM2": 54.5,
             },
         )
 
@@ -492,12 +574,17 @@ def test_update_and_delete_location_cascade_to_related_records(monkeypatch, tmp_
     updated_body = update_response.json()
     assert updated_body["name"] == "EDSA Sec Walk Updated"
     assert updated_body["latitude"] == 14.64
+    assert updated_body["walkableAreaM2"] == 54.5
+    assert updated_body["roiCoordinates"]["referenceSize"] == [1920, 1080]
     assert updated_body["videos"][0]["id"] == "video-1"
 
     updated_state = store.load_state()
+    updated_location = next(location for location in updated_state["locations"] if location["id"] == "edsa-sec-walk")
     assert updated_state["videos"][0]["location"] == "EDSA Sec Walk Updated"
     assert updated_state["videos"][0]["gpsLat"] == 14.64
     assert updated_state["videos"][0]["gpsLng"] == 121.08
+    assert updated_location["walkableAreaM2"] == 54.5
+    assert updated_location["roiCoordinates"]["includePolygonsNorm"][0][0] == [0.2, 0.2]
     assert {event["location"] for event in updated_state["events"]} == {"EDSA Sec Walk Updated"}
 
     with TestClient(main.app) as client:
@@ -1548,6 +1635,16 @@ def test_dashboard_endpoints_only_surface_real_footage_and_neutral_empty_locatio
     configure_temp_storage(monkeypatch, tmp_path)
 
     state = store.seed_state()
+    for location in state["locations"]:
+        if location["id"] == "edsa-sec-walk":
+            location["roiCoordinates"] = {
+                "referenceSize": [1920, 1080],
+                "includePolygonsNorm": [
+                    [[0.1, 0.1], [0.5, 0.1], [0.5, 0.5], [0.1, 0.5]],
+                ],
+            }
+            location["walkableAreaM2"] = 4.0
+
     state["videos"] = [
         {
             "id": "video-1",
@@ -1563,6 +1660,59 @@ def test_dashboard_endpoints_only_surface_real_footage_and_neutral_empty_locatio
             "rawPath": None,
             "processedPath": None,
         }
+    ]
+    state["pedestrianTracks"] = [
+        {
+            "id": "track-in-roi",
+            "videoId": "video-1",
+            "pedestrianId": 1,
+            "location": "EDSA Sec Walk",
+            "firstTimestamp": "10:01:00 AM",
+            "lastTimestamp": "10:01:30 AM",
+            "bestTimestamp": "10:01:10 AM",
+            "firstFrame": 10,
+            "lastFrame": 30,
+            "bestFrame": 15,
+            "firstOffsetSeconds": 60.0,
+            "lastOffsetSeconds": 90.0,
+            "bestOffsetSeconds": 70.0,
+            "footPointNorm": [0.3, 0.3],
+            "occlusionClass": 1,
+        },
+        {
+            "id": "track-outside-roi",
+            "videoId": "video-1",
+            "pedestrianId": 2,
+            "location": "EDSA Sec Walk",
+            "firstTimestamp": "10:05:00 AM",
+            "lastTimestamp": "10:05:20 AM",
+            "bestTimestamp": "10:05:10 AM",
+            "firstFrame": 40,
+            "lastFrame": 60,
+            "bestFrame": 48,
+            "firstOffsetSeconds": 300.0,
+            "lastOffsetSeconds": 320.0,
+            "bestOffsetSeconds": 310.0,
+            "footPointNorm": [0.8, 0.8],
+            "occlusionClass": 2,
+        },
+        {
+            "id": "track-in-roi-no-occlusion",
+            "videoId": "video-1",
+            "pedestrianId": 3,
+            "location": "EDSA Sec Walk",
+            "firstTimestamp": "10:08:00 AM",
+            "lastTimestamp": "10:08:15 AM",
+            "bestTimestamp": "10:08:05 AM",
+            "firstFrame": 70,
+            "lastFrame": 82,
+            "bestFrame": 74,
+            "firstOffsetSeconds": 480.0,
+            "lastOffsetSeconds": 495.0,
+            "bestOffsetSeconds": 485.0,
+            "footPointNorm": [0.25, 0.25],
+            "occlusionClass": None,
+        },
     ]
     state["events"] = [
         {
@@ -1690,9 +1840,10 @@ def test_dashboard_endpoints_only_surface_real_footage_and_neutral_empty_locatio
     kostka_walk = next(location for location in occlusion["locations"] if location["id"] == "kostka-walk")
 
     assert edsa_sec_walk["hasFootage"] is True
-    assert edsa_sec_walk["hasOcclusionData"] is True
-    assert edsa_sec_walk["state"] == "clear"
-    assert edsa_sec_walk["score"] is not None
+    assert edsa_sec_walk["hasPTSIData"] is True
+    assert edsa_sec_walk["state"] == "moderate"
+    assert edsa_sec_walk["score"] == pytest.approx(34.79, abs=0.01)
+    assert edsa_sec_walk["hourlyScores"] == [{"hour": "10:00", "score": pytest.approx(34.79, abs=0.01)}]
     assert kostka_walk["hasFootage"] is False
     assert kostka_walk["state"] == "no-footage"
 

@@ -11,6 +11,13 @@ export interface VideoCard {
   processedPath?: string | null
 }
 
+export type NormalizedPoint = [number, number]
+
+export interface ROIConfiguration {
+  referenceSize: [number, number]
+  includePolygonsNorm: NormalizedPoint[][]
+}
+
 export interface LocationRecord {
   id: string
   name: string
@@ -18,8 +25,12 @@ export interface LocationRecord {
   longitude: number
   description: string
   address: string
+  roiCoordinates?: ROIConfiguration | null
+  walkableAreaM2?: number | null
   videos: VideoCard[]
 }
+
+export type LocationPayload = Omit<LocationRecord, "id" | "videos">
 
 export interface LocationSearchResult {
   name: string
@@ -85,7 +96,7 @@ export interface TrafficResponse {
   locationTotals: LocationTotal[]
 }
 
-export interface OcclusionTrendResponse {
+export interface PTSITrendResponse {
   timeRange: string
   series: TrafficPoint[]
   bucketMinutes: number
@@ -97,30 +108,36 @@ export interface OcclusionTrendResponse {
   windowEnd?: string | null
 }
 
-export type OcclusionState = "clear" | "moderate" | "severe" | "no-footage" | "no-data"
+export type PTSIState = "clear" | "moderate" | "severe" | "no-footage" | "no-data"
 
-export interface OcclusionHourScore {
+export interface PTSIHourScore {
   hour: string
   score: number
 }
 
-export interface OcclusionLocation {
+export interface PTSILocation {
   id: string
   name: string
   latitude: number
   longitude: number
   hasFootage: boolean
-  hasOcclusionData: boolean
+  hasPTSIData: boolean
   score?: number | null
-  state: OcclusionState
-  hourlyScores: OcclusionHourScore[]
+  state: PTSIState
+  hourlyScores: PTSIHourScore[]
 }
 
-export interface OcclusionMapResponse {
+export interface PTSIMapResponse {
   timeRange: string
   availableHours: string[]
-  locations: OcclusionLocation[]
+  locations: PTSILocation[]
 }
+
+export type OcclusionTrendResponse = PTSITrendResponse
+export type OcclusionState = PTSIState
+export type OcclusionHourScore = PTSIHourScore
+export type OcclusionLocation = PTSILocation
+export type OcclusionMapResponse = PTSIMapResponse
 
 export interface AIBadge {
   label: string
@@ -176,7 +193,7 @@ export interface VideoUploadStatus {
   state: "queued" | "processing" | "complete" | "error" | "cancelled"
   progressPercent?: number | null
   message: string
-  phase?: "queued" | "tracking" | "vision" | "finalizing" | null
+  phase?: "queued" | "tracking" | "vision" | "ptsi" | "finalizing" | null
   videoId?: string | null
   error?: string | null
   updatedAt: string
@@ -284,14 +301,14 @@ export function searchLocations(query: string) {
   return request<LocationSearchResult[]>(withQuery("/api/locations/search", { query }))
 }
 
-export function createLocation(payload: Omit<LocationRecord, "id" | "videos">) {
+export function createLocation(payload: LocationPayload) {
   return request<LocationRecord>("/api/locations", {
     method: "POST",
     body: JSON.stringify(payload),
   })
 }
 
-export function updateLocation(locationId: string, payload: Omit<LocationRecord, "id" | "videos">) {
+export function updateLocation(locationId: string, payload: LocationPayload) {
   return request<LocationRecord>(`/api/locations/${locationId}`, {
     method: "PUT",
     body: JSON.stringify(payload),
@@ -450,11 +467,11 @@ export function getDashboardTraffic(date?: string, timeRange = "whole-day", focu
 }
 
 export function getDashboardOcclusion(date?: string, timeRange = "whole-day") {
-  return request<OcclusionMapResponse>(withQuery("/api/dashboard/occlusion", { date, timeRange }))
+  return request<PTSIMapResponse>(withQuery("/api/dashboard/occlusion", { date, timeRange }))
 }
 
 export function getDashboardOcclusionTrends(date?: string, timeRange = "whole-day", focusTime?: string, zoomLevel = 0) {
-  return request<OcclusionTrendResponse>(withQuery("/api/dashboard/occlusion-trends", {
+  return request<PTSITrendResponse>(withQuery("/api/dashboard/occlusion-trends", {
     date,
     timeRange,
     focusTime,

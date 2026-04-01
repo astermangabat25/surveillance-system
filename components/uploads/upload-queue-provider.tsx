@@ -12,7 +12,7 @@ type UploadState = VideoUploadStatus["state"]
 type UploadPhase = VideoUploadStatus["phase"]
 
 const UPLOAD_STATES: UploadState[] = ["queued", "processing", "complete", "error", "cancelled"]
-const UPLOAD_PHASES: NonNullable<UploadPhase>[] = ["queued", "tracking", "vision", "finalizing"]
+const UPLOAD_PHASES: NonNullable<UploadPhase>[] = ["queued", "tracking", "vision", "ptsi", "finalizing"]
 
 export interface EnqueuedUploadInput {
   file: File
