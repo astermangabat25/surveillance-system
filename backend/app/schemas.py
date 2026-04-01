@@ -108,6 +108,10 @@ class PTSITrendResponse(BaseModel):
 class PTSIHourScore(BaseModel):
     hour: str
     score: float
+    mode: Optional[Literal["strict-fhwa", "roi-testing"]] = None
+    averagePedestrians: Optional[float] = None
+    uniquePedestrians: Optional[int] = None
+    occlusionMix: Optional[dict[str, float]] = None
 
 
 class PTSILocation(BaseModel):
@@ -119,6 +123,14 @@ class PTSILocation(BaseModel):
     hasPTSIData: bool
     score: Optional[float] = None
     state: Literal["clear", "moderate", "severe", "no-footage", "no-data"]
+    mode: Optional[Literal["strict-fhwa", "roi-testing"]] = None
+    averagePedestrians: Optional[float] = None
+    uniquePedestrians: Optional[int] = None
+    occlusionMix: Optional[dict[str, float]] = None
+    peakHour: Optional[str] = None
+    peakHourScore: Optional[float] = None
+    offPeakHour: Optional[str] = None
+    offPeakHourScore: Optional[float] = None
     hourlyScores: list[PTSIHourScore] = Field(default_factory=list)
 
 

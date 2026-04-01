@@ -21,11 +21,18 @@ DATA_FILE = STORAGE_DIR / "dev_data.json"
 CLOCK_TIME_FORMATS = ("%H:%M", "%H:%M:%S", "%I:%M %p", "%I:%M:%S %p")
 MIN_DRILLDOWN_BUCKET_MINUTES = 5
 OWDI_CLASS_WEIGHTS = {0: 1, 1: 2, 2: 3}
-PTSI_OCCLUSION_SCORES = {0: 0.0, 1: 0.5, 2: 1.0}
-PTSI_CLEAR_SPACE_M2 = 5.6
-PTSI_SEVERE_SPACE_M2 = 0.75
+PTSI_OCCLUSION_WEIGHTS = {0: 1, 1: 2, 2: 3}
 PTSI_CONGESTION_WEIGHT = 0.85
 PTSI_OCCLUSION_WEIGHT = 0.15
+PTSI_ROI_TESTING_CAPACITY_PER_FULL_FRAME = 12.0
+DEFAULT_EDSA_SEC_WALK_ROI = {
+    "referenceSize": [1920, 1080],
+    "includePolygonsNorm": [
+        [[0.245870, 0.988037], [0.995651, 0.997306], [0.219792, 0.098426], [0.196354, 0.101481]],
+        [[0.432646, 0.337861], [0.564266, 0.309009], [0.544432, 0.472491], [0.487635, 0.403574]],
+        [[0.221693, 0.094250], [0.346099, 0.244907], [0.344297, 0.187213]],
+    ],
+}
 LOCATION_PERSISTED_FIELDS = (
     "id",
     "name",
@@ -250,10 +257,46 @@ def seed_state() -> dict[str, Any]:
     return {
         "model": {"currentModel": "yolov8n-bytetrack.pt", "uploadedAt": None},
         "locations": [
-            {"id": "edsa-sec-walk", "name": "EDSA Sec Walk", "latitude": 14.6397, "longitude": 121.0775, "description": "Approximate Xavier Hall camera anchor along the EDSA security walkway.", "address": "Ateneo de Manila University · Xavier Hall"},
-            {"id": "kostka-walk", "name": "Kostka Walk", "latitude": 14.6390, "longitude": 121.0781, "description": "Approximate Kostka Hall pedestrian corridor camera anchor.", "address": "Ateneo de Manila University · Kostka Hall"},
-            {"id": "gate-1-walkway", "name": "Gate 1 Walkway", "latitude": 14.6418, "longitude": 121.0758, "description": "Approximate Gate 1 walkway camera anchor.", "address": "Ateneo de Manila University · Gate 1"},
-            {"id": "gate-3-walkway", "name": "Gate 3 Walkway", "latitude": 14.6376, "longitude": 121.0742, "description": "Approximate Gate 3 walkway camera anchor.", "address": "Ateneo de Manila University · Gate 3"},
+            {
+                "id": "edsa-sec-walk",
+                "name": "EDSA Sec Walk",
+                "latitude": 14.6397,
+                "longitude": 121.0775,
+                "description": "Approximate Xavier Hall camera anchor along the EDSA security walkway.",
+                "address": "Ateneo de Manila University · Xavier Hall",
+                "roiCoordinates": deepcopy(DEFAULT_EDSA_SEC_WALK_ROI),
+                "walkableAreaM2": None,
+            },
+            {
+                "id": "kostka-walk",
+                "name": "Kostka Walk",
+                "latitude": 14.6390,
+                "longitude": 121.0781,
+                "description": "Approximate Kostka Hall pedestrian corridor camera anchor.",
+                "address": "Ateneo de Manila University · Kostka Hall",
+                "roiCoordinates": None,
+                "walkableAreaM2": None,
+            },
+            {
+                "id": "gate-1-walkway",
+                "name": "Gate 1 Walkway",
+                "latitude": 14.6418,
+                "longitude": 121.0758,
+                "description": "Approximate Gate 1 walkway camera anchor.",
+                "address": "Ateneo de Manila University · Gate 1",
+                "roiCoordinates": None,
+                "walkableAreaM2": None,
+            },
+            {
+                "id": "gate-3-walkway",
+                "name": "Gate 3 Walkway",
+                "latitude": 14.6376,
+                "longitude": 121.0742,
+                "description": "Approximate Gate 3 walkway camera anchor.",
+                "address": "Ateneo de Manila University · Gate 3",
+                "roiCoordinates": None,
+                "walkableAreaM2": None,
+            },
         ],
         "videos": [],
         "events": [],
@@ -276,6 +319,22 @@ def load_state() -> dict[str, Any]:
     if "pedestrianTracks" not in state:
         state["pedestrianTracks"] = []
         changed = True
+
+    for location in state.get("locations", []):
+        if "roiCoordinates" not in location:
+            location["roiCoordinates"] = None
+            changed = True
+        if "walkableAreaM2" not in location:
+            location["walkableAreaM2"] = None
+            changed = True
+        if location.get("id") == "edsa-sec-walk" and not location.get("roiCoordinates"):
+            location["roiCoordinates"] = deepcopy(DEFAULT_EDSA_SEC_WALK_ROI)
+            changed = True
+
+    for track in state.get("pedestrianTracks", []):
+        if not isinstance(track.get("trajectorySamples"), list):
+            track["trajectorySamples"] = _legacy_track_trajectory_samples(track)
+            changed = True
 
     if changed:
         save_state(state)
@@ -698,6 +757,79 @@ def _normalized_foot_point(track: dict[str, Any]) -> Optional[tuple[float, float
     return (x_value, y_value)
 
 
+def _trajectory_sample_second(sample: Any) -> Optional[int]:
+    if not isinstance(sample, (list, tuple)) or not sample:
+        return None
+
+    try:
+        return max(0, int(round(float(sample[0]))))
+    except (TypeError, ValueError):
+        return None
+
+
+def _trajectory_sample_point(sample: Any) -> Optional[tuple[float, float]]:
+    if not isinstance(sample, (list, tuple)) or len(sample) < 3:
+        return None
+
+    try:
+        x_value = float(sample[1])
+        y_value = float(sample[2])
+    except (TypeError, ValueError):
+        return None
+
+    if not (0.0 <= x_value <= 1.0 and 0.0 <= y_value <= 1.0):
+        return None
+    return (x_value, y_value)
+
+
+def _trajectory_sample_occlusion_class(sample: Any) -> Optional[int]:
+    if not isinstance(sample, (list, tuple)) or len(sample) < 4:
+        return None
+
+    try:
+        occlusion_class = int(sample[3])
+    except (TypeError, ValueError):
+        return None
+    return occlusion_class if occlusion_class in PTSI_OCCLUSION_WEIGHTS else None
+
+
+def _legacy_track_trajectory_samples(track: dict[str, Any]) -> list[list[Any]]:
+    foot_point = _normalized_foot_point(track)
+    if foot_point is None:
+        return []
+
+    raw_offset = track.get("bestOffsetSeconds")
+    if raw_offset is None:
+        raw_offset = track.get("firstOffsetSeconds")
+    if raw_offset is None:
+        raw_offset = track.get("lastOffsetSeconds")
+
+    try:
+        offset_seconds = max(0, int(round(float(raw_offset))))
+    except (TypeError, ValueError):
+        offset_seconds = 0
+
+    return [[offset_seconds, foot_point[0], foot_point[1], track.get("occlusionClass")]]
+
+
+def _normalized_trajectory_samples(track: dict[str, Any]) -> list[tuple[int, tuple[float, float], Optional[int]]]:
+    raw_samples = track.get("trajectorySamples")
+    sample_sets = [raw_samples] if isinstance(raw_samples, list) else []
+    sample_sets.append(_legacy_track_trajectory_samples(track))
+
+    for candidate_samples in sample_sets:
+        normalized: list[tuple[int, tuple[float, float], Optional[int]]] = []
+        for sample in candidate_samples:
+            offset_second = _trajectory_sample_second(sample)
+            point = _trajectory_sample_point(sample)
+            if offset_second is None or point is None:
+                continue
+            normalized.append((offset_second, point, _trajectory_sample_occlusion_class(sample)))
+        if normalized:
+            return normalized
+    return []
+
+
 def _normalized_roi_polygons(location: dict[str, Any]) -> list[list[tuple[float, float]]]:
     roi_coordinates = location.get("roiCoordinates")
     if not isinstance(roi_coordinates, dict):
@@ -762,15 +894,18 @@ def _point_in_polygon(point: tuple[float, float], polygon: list[tuple[float, flo
     return inside
 
 
-def _track_in_location_roi(track: dict[str, Any], location: dict[str, Any]) -> bool:
+def _point_in_location_roi(point: tuple[float, float], location: dict[str, Any]) -> bool:
     polygons = _normalized_roi_polygons(location)
     if not polygons:
         return True
+    return any(_point_in_polygon(point, polygon) for polygon in polygons)
 
+
+def _track_in_location_roi(track: dict[str, Any], location: dict[str, Any]) -> bool:
     foot_point = _normalized_foot_point(track)
     if foot_point is None:
         return False
-    return any(_point_in_polygon(foot_point, polygon) for polygon in polygons)
+    return _point_in_location_roi(foot_point, location)
 
 
 def _location_walkable_area_m2(location: dict[str, Any]) -> Optional[float]:
@@ -780,6 +915,43 @@ def _location_walkable_area_m2(location: dict[str, Any]) -> Optional[float]:
     except (TypeError, ValueError):
         return None
     return area_value if area_value > 0 else None
+
+
+def _location_ptsi_mode(location: dict[str, Any]) -> str:
+    return "strict-fhwa" if _location_walkable_area_m2(location) is not None else "roi-testing"
+
+
+def _polygon_area(polygon: list[tuple[float, float]]) -> float:
+    if len(polygon) < 3:
+        return 0.0
+
+    area = 0.0
+    for index, (x1, y1) in enumerate(polygon):
+        x2, y2 = polygon[(index + 1) % len(polygon)]
+        area += (x1 * y2) - (x2 * y1)
+    return abs(area) / 2.0
+
+
+def _location_roi_area_ratio(location: dict[str, Any]) -> float:
+    polygons = _normalized_roi_polygons(location)
+    if not polygons:
+        return 1.0
+    return min(1.0, max(0.0, sum(_polygon_area(polygon) for polygon in polygons)))
+
+
+def _location_capacity_proxy(location: dict[str, Any]) -> float:
+    return max(1.0, _location_roi_area_ratio(location) * PTSI_ROI_TESTING_CAPACITY_PER_FULL_FRAME)
+
+
+def _ptsi_occlusion_mix(light_count: int, moderate_count: int, heavy_count: int, visible_total: int) -> dict[str, float]:
+    if visible_total <= 0:
+        return {"lightPercent": 0.0, "moderatePercent": 0.0, "heavyPercent": 0.0}
+
+    return {
+        "lightPercent": round((light_count / visible_total) * 100.0, 1),
+        "moderatePercent": round((moderate_count / visible_total) * 100.0, 1),
+        "heavyPercent": round((heavy_count / visible_total) * 100.0, 1),
+    }
 
 
 def _resolve_root_window(
@@ -1246,20 +1418,35 @@ def _percentile(values: list[float], percentile: float) -> float:
 
 
 def _ptsi_congestion_score(visible_count: int, walkable_area_m2: Optional[float]) -> float:
-    if visible_count <= 0 or walkable_area_m2 is None:
+    if visible_count <= 0:
+        return 0.0
+
+    if walkable_area_m2 is None:
         return 0.0
 
     space_per_pedestrian = walkable_area_m2 / float(visible_count)
-    if space_per_pedestrian <= PTSI_SEVERE_SPACE_M2:
-        return 1.0
-    if space_per_pedestrian >= PTSI_CLEAR_SPACE_M2:
+    if space_per_pedestrian > 5.6:
+        return 0.0
+    if space_per_pedestrian >= 3.7:
+        return 0.2
+    if space_per_pedestrian >= 2.2:
+        return 0.4
+    if space_per_pedestrian >= 1.4:
+        return 0.6
+    if space_per_pedestrian >= 0.75:
+        return 0.8
+    return 1.0
+
+
+def _ptsi_score(visible_count: int, location: dict[str, Any], occlusion_value: float) -> float:
+    if visible_count <= 0:
         return 0.0
 
-    return (PTSI_CLEAR_SPACE_M2 - space_per_pedestrian) / (PTSI_CLEAR_SPACE_M2 - PTSI_SEVERE_SPACE_M2)
+    if _location_ptsi_mode(location) == "strict-fhwa":
+        congestion_score = _ptsi_congestion_score(visible_count, _location_walkable_area_m2(location))
+    else:
+        congestion_score = min(1.0, visible_count / _location_capacity_proxy(location))
 
-
-def _ptsi_score(visible_count: int, walkable_area_m2: Optional[float], occlusion_value: float) -> float:
-    congestion_score = _ptsi_congestion_score(visible_count, walkable_area_m2)
     score = 100.0 * ((PTSI_CONGESTION_WEIGHT * congestion_score) + (PTSI_OCCLUSION_WEIGHT * occlusion_value))
     return round(min(max(score, 0.0), 100.0), 2)
 
@@ -1358,19 +1545,43 @@ def dashboard_occlusion_trends(
 
 
 def dashboard_occlusion(date: Optional[str] = None, time_range: str = "whole-day") -> dict[str, Any]:
-    state, resolved_date, videos, events = _filtered_dashboard_records(date)
+    state, resolved_date, videos, _events = _filtered_dashboard_records(date)
     videos_by_id = {video["id"]: video for video in videos}
     locations_by_id = {location["id"]: location for location in state["locations"]}
     pedestrian_tracks = _filtered_pedestrian_tracks(state, videos)
-    observation_times = [
-        timestamp
-        for timestamp in (
-            _pedestrian_track_timestamp(track, videos_by_id[track.get("videoId")])
-            for track in pedestrian_tracks
-            if track.get("videoId") in videos_by_id
-        )
-        if timestamp is not None
-    ]
+
+    sample_observations: list[dict[str, Any]] = []
+    observation_times: list[datetime] = []
+    for fallback_index, track in enumerate(pedestrian_tracks):
+        video_id = str(track.get("videoId") or "")
+        video = videos_by_id.get(video_id)
+        if video is None:
+            continue
+
+        location = locations_by_id.get(video["locationId"])
+        if location is None:
+            continue
+
+        observed_at = _observation_time(video) or _pedestrian_track_timestamp(track, video)
+        if observed_at is None:
+            continue
+
+        track_key = _tracked_pedestrian_track_key(track, video_id, fallback_index)
+        for offset_second, point, occlusion_class in _normalized_trajectory_samples(track):
+            if not _point_in_location_roi(point, location):
+                continue
+
+            sample_time = (observed_at + timedelta(seconds=offset_second)).replace(microsecond=0)
+            observation_times.append(sample_time)
+            sample_observations.append(
+                {
+                    "locationId": video["locationId"],
+                    "trackKey": track_key,
+                    "observedAt": sample_time,
+                    "occlusionClass": occlusion_class,
+                }
+            )
+
     if not observation_times:
         observation_times = [timestamp for timestamp in (_observation_time(video) for video in videos) if timestamp is not None]
 
@@ -1378,72 +1589,111 @@ def dashboard_occlusion(date: Optional[str] = None, time_range: str = "whole-day
     window_start = buckets[0][1] if buckets else datetime.strptime(resolved_date, "%Y-%m-%d")
     window_end = (buckets[-1][1] + bucket_span) if buckets else (window_start + timedelta(days=1))
 
-    minute_metrics: dict[str, dict[datetime, dict[str, Union[int, float]]]] = {}
-    for track in pedestrian_tracks:
-        video = videos_by_id.get(track.get("videoId") or "")
-        if video is None:
+    second_metrics: dict[str, dict[datetime, dict[str, dict[str, Optional[int]]]]] = {}
+    for sample in sample_observations:
+        observed_at = sample["observedAt"]
+        if observed_at < window_start or observed_at >= window_end:
             continue
 
-        location = locations_by_id.get(video["locationId"])
-        if location is None or not _track_in_location_roi(track, location):
+        location_seconds = second_metrics.setdefault(sample["locationId"], {})
+        second_entry = location_seconds.setdefault(observed_at, {"tracks": {}})
+        track_occlusions = second_entry["tracks"]
+        track_key = str(sample["trackKey"])
+        incoming_occlusion = sample.get("occlusionClass")
+        if track_key not in track_occlusions:
+            track_occlusions[track_key] = incoming_occlusion
             continue
 
-        track_start = _pedestrian_track_timestamp(track, video)
-        track_end = _pedestrian_track_end_timestamp(track, video)
-        if track_start is None or track_end is None:
-            continue
-        if track_end < track_start:
-            track_end = track_start
+        existing_occlusion = track_occlusions[track_key]
+        if incoming_occlusion is not None and (existing_occlusion is None or int(incoming_occlusion) > int(existing_occlusion)):
+            track_occlusions[track_key] = incoming_occlusion
 
-        try:
-            occlusion_class = int(track.get("occlusionClass"))
-        except (TypeError, ValueError):
-            occlusion_class = 0
-        occlusion_value = PTSI_OCCLUSION_SCORES.get(occlusion_class, 0.0)
-
-        minute_bucket = track_start.replace(second=0, microsecond=0)
-        final_minute_bucket = track_end.replace(second=0, microsecond=0)
-        while minute_bucket <= final_minute_bucket:
-            if window_start <= minute_bucket < window_end:
-                location_minutes = minute_metrics.setdefault(video["locationId"], {})
-                minute_entry = location_minutes.setdefault(minute_bucket, {"visibleCount": 0, "occlusionValue": 0.0})
-                minute_entry["visibleCount"] = int(minute_entry["visibleCount"]) + 1
-                minute_entry["occlusionValue"] = max(float(minute_entry["occlusionValue"]), occlusion_value)
-            minute_bucket += timedelta(minutes=1)
-
-    hourly_scores_by_location: dict[str, list[dict[str, Union[str, float]]]] = {}
     available_hours: set[str] = set()
-    for location_id, minute_scores in minute_metrics.items():
-        location = locations_by_id.get(location_id)
-        if location is None:
-            continue
-
-        walkable_area_m2 = _location_walkable_area_m2(location)
-        per_hour_scores: dict[str, list[float]] = {}
-        for minute_bucket, minute_entry in minute_scores.items():
-            hour_label = minute_bucket.strftime("%H:00")
-            per_hour_scores.setdefault(hour_label, []).append(
-                _ptsi_score(
-                    int(minute_entry["visibleCount"]),
-                    walkable_area_m2,
-                    float(minute_entry["occlusionValue"]),
-                )
-            )
-
-        location_hourly_scores = [
-            {"hour": hour_label, "score": round(_percentile(scores, 90), 2)}
-            for hour_label, scores in sorted(per_hour_scores.items())
-        ]
-        hourly_scores_by_location[location_id] = location_hourly_scores
-        available_hours.update(str(score["hour"]) for score in location_hourly_scores)
-
     active_location_ids = _active_location_ids(videos)
     locations_payload = []
     for location in state["locations"]:
+        mode = _location_ptsi_mode(location)
         has_footage = location["id"] in active_location_ids
-        hourly_scores = hourly_scores_by_location.get(location["id"], [])
-        overall_score = max((float(score["score"]) for score in hourly_scores), default=None)
+
+        hourly_rollups: dict[str, dict[str, Any]] = {}
+        total_visible = 0
+        total_light = 0
+        total_moderate = 0
+        total_heavy = 0
+        total_sample_seconds = 0
+        unique_track_keys: set[str] = set()
+
+        for second_at, second_entry in sorted(second_metrics.get(location["id"], {}).items()):
+            track_occlusions = second_entry.get("tracks") or {}
+            visible_count = len(track_occlusions)
+            if visible_count <= 0:
+                continue
+
+            light_count = sum(1 for value in track_occlusions.values() if value == 0)
+            moderate_count = sum(1 for value in track_occlusions.values() if value == 1)
+            heavy_count = sum(1 for value in track_occlusions.values() if value == 2)
+            occlusion_value = (
+                (light_count * PTSI_OCCLUSION_WEIGHTS[0])
+                + (moderate_count * PTSI_OCCLUSION_WEIGHTS[1])
+                + (heavy_count * PTSI_OCCLUSION_WEIGHTS[2])
+            ) / (3.0 * visible_count)
+
+            second_score = _ptsi_score(visible_count, location, occlusion_value)
+            hour_label = second_at.strftime("%H:00")
+            hour_rollup = hourly_rollups.setdefault(
+                hour_label,
+                {
+                    "scores": [],
+                    "visibleTotal": 0,
+                    "sampleSeconds": 0,
+                    "light": 0,
+                    "moderate": 0,
+                    "heavy": 0,
+                    "trackKeys": set(),
+                },
+            )
+            hour_rollup["scores"].append(second_score)
+            hour_rollup["visibleTotal"] += visible_count
+            hour_rollup["sampleSeconds"] += 1
+            hour_rollup["light"] += light_count
+            hour_rollup["moderate"] += moderate_count
+            hour_rollup["heavy"] += heavy_count
+            hour_rollup["trackKeys"].update(track_occlusions.keys())
+
+            total_visible += visible_count
+            total_light += light_count
+            total_moderate += moderate_count
+            total_heavy += heavy_count
+            total_sample_seconds += 1
+            unique_track_keys.update(track_occlusions.keys())
+
+        hourly_scores = []
+        for hour_label, rollup in sorted(hourly_rollups.items()):
+            available_hours.add(hour_label)
+            visible_total = int(rollup["visibleTotal"])
+            sample_seconds = int(rollup["sampleSeconds"])
+            hourly_scores.append(
+                {
+                    "hour": hour_label,
+                    "score": round(_percentile(list(rollup["scores"]), 90), 2),
+                    "mode": mode,
+                    "averagePedestrians": round(visible_total / sample_seconds, 2) if sample_seconds else 0.0,
+                    "uniquePedestrians": len(rollup["trackKeys"]),
+                    "occlusionMix": _ptsi_occlusion_mix(
+                        int(rollup["light"]),
+                        int(rollup["moderate"]),
+                        int(rollup["heavy"]),
+                        visible_total,
+                    ),
+                }
+            )
+
         has_occlusion_data = bool(hourly_scores)
+        overall_score = max((float(score["score"]) for score in hourly_scores), default=None)
+        ranked_hours = sorted(hourly_scores, key=lambda score: (float(score["score"]), str(score["hour"])))
+        peak_hour = ranked_hours[-1] if ranked_hours else None
+        off_peak_hour = ranked_hours[0] if ranked_hours else None
+
         locations_payload.append(
             {
                 "id": location["id"],
@@ -1454,6 +1704,14 @@ def dashboard_occlusion(date: Optional[str] = None, time_range: str = "whole-day
                 "hasPTSIData": has_occlusion_data,
                 "score": overall_score,
                 "state": _severity_state(overall_score, has_footage, has_occlusion_data),
+                "mode": mode,
+                "averagePedestrians": round(total_visible / total_sample_seconds, 2) if total_sample_seconds else None,
+                "uniquePedestrians": len(unique_track_keys) if unique_track_keys else None,
+                "occlusionMix": _ptsi_occlusion_mix(total_light, total_moderate, total_heavy, total_visible) if total_visible else None,
+                "peakHour": peak_hour["hour"] if peak_hour else None,
+                "peakHourScore": float(peak_hour["score"]) if peak_hour else None,
+                "offPeakHour": off_peak_hour["hour"] if off_peak_hour else None,
+                "offPeakHourScore": float(off_peak_hour["score"]) if off_peak_hour else None,
                 "hourlyScores": hourly_scores,
             }
         )

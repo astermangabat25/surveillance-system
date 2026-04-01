@@ -536,6 +536,7 @@ def run_video_inference(
     max_people_in_frame = 0
     events: list[dict[str, Any]] = []
     pedestrian_tracks: dict[int, dict[str, Any]] = {}
+    track_sample_indexes: dict[int, dict[int, int]] = {}
     last_reported_percent = -1
 
     if progress_callback is not None:
@@ -585,6 +586,7 @@ def run_video_inference(
                     "occlusionClass": occlusion_class,
                     "bestArea": 0.0,
                     "footPointNorm": None,
+                    "trajectorySamples": [],
                 }
                 pedestrian_tracks[track_id] = track_summary
             else:
@@ -601,6 +603,22 @@ def run_video_inference(
                 foot_point_norm = _foot_point_norm(bounds, frame_image)
                 if foot_point_norm is not None:
                     track_summary["footPointNorm"] = foot_point_norm
+                    sample_second = int(max(0.0, (frame_index - 1) / fps))
+                    sample_indexes = track_sample_indexes.setdefault(track_id, {})
+                    sample_index = sample_indexes.get(sample_second)
+                    if sample_index is None:
+                        trajectory_samples = track_summary.setdefault("trajectorySamples", [])
+                        sample_indexes[sample_second] = len(trajectory_samples)
+                        trajectory_samples.append([sample_second, foot_point_norm[0], foot_point_norm[1], occlusion_class])
+                    else:
+                        trajectory_sample = track_summary["trajectorySamples"][sample_index]
+                        trajectory_sample[1] = foot_point_norm[0]
+                        trajectory_sample[2] = foot_point_norm[1]
+                        existing_occlusion = trajectory_sample[3]
+                        if occlusion_class is not None and (
+                            existing_occlusion is None or int(occlusion_class) > int(existing_occlusion)
+                        ):
+                            trajectory_sample[3] = occlusion_class
                 crop, crop_area = _crop_frame(frame_image, bounds)
                 if crop is not None and crop_area > float(track_summary.get("bestArea") or 0.0):
                     track_summary["bestArea"] = crop_area

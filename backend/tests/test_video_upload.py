@@ -1841,11 +1841,122 @@ def test_dashboard_endpoints_only_surface_real_footage_and_neutral_empty_locatio
 
     assert edsa_sec_walk["hasFootage"] is True
     assert edsa_sec_walk["hasPTSIData"] is True
-    assert edsa_sec_walk["state"] == "moderate"
-    assert edsa_sec_walk["score"] == pytest.approx(34.79, abs=0.01)
-    assert edsa_sec_walk["hourlyScores"] == [{"hour": "10:00", "score": pytest.approx(34.79, abs=0.01)}]
+    assert edsa_sec_walk["state"] == "clear"
+    assert edsa_sec_walk["score"] == pytest.approx(26.0, abs=0.01)
+    assert edsa_sec_walk["mode"] == "strict-fhwa"
+    assert edsa_sec_walk["averagePedestrians"] == pytest.approx(1.0, abs=0.01)
+    assert edsa_sec_walk["uniquePedestrians"] == 2
+    assert edsa_sec_walk["occlusionMix"] == {
+        "lightPercent": pytest.approx(0.0, abs=0.01),
+        "moderatePercent": pytest.approx(50.0, abs=0.01),
+        "heavyPercent": pytest.approx(0.0, abs=0.01),
+    }
+    assert edsa_sec_walk["peakHour"] == "10:00"
+    assert edsa_sec_walk["peakHourScore"] == pytest.approx(26.0, abs=0.01)
+    assert edsa_sec_walk["offPeakHour"] == "10:00"
+    assert edsa_sec_walk["offPeakHourScore"] == pytest.approx(26.0, abs=0.01)
+    assert edsa_sec_walk["hourlyScores"] == [
+        {
+            "hour": "10:00",
+            "score": pytest.approx(26.0, abs=0.01),
+            "mode": "strict-fhwa",
+            "averagePedestrians": pytest.approx(1.0, abs=0.01),
+            "uniquePedestrians": 2,
+            "occlusionMix": {
+                "lightPercent": pytest.approx(0.0, abs=0.01),
+                "moderatePercent": pytest.approx(50.0, abs=0.01),
+                "heavyPercent": pytest.approx(0.0, abs=0.01),
+            },
+        }
+    ]
     assert kostka_walk["hasFootage"] is False
     assert kostka_walk["state"] == "no-footage"
+
+
+def test_dashboard_occlusion_uses_per_second_trajectory_samples_for_ptsi(monkeypatch, tmp_path: Path) -> None:
+    configure_temp_storage(monkeypatch, tmp_path)
+
+    state = store.seed_state()
+    for location in state["locations"]:
+        if location["id"] == "edsa-sec-walk":
+            location["roiCoordinates"] = {
+                "referenceSize": [1920, 1080],
+                "includePolygonsNorm": [[[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]],
+            }
+            location["walkableAreaM2"] = None
+
+    state["videos"] = [
+        {
+            "id": "video-ptsi-1",
+            "locationId": "edsa-sec-walk",
+            "location": "EDSA Sec Walk",
+            "timestamp": "10:00",
+            "date": "2026-03-17",
+            "startTime": "10:00",
+            "endTime": "10:10",
+            "gpsLat": 14.6397,
+            "gpsLng": 121.0775,
+            "pedestrianCount": 3,
+            "rawPath": None,
+            "processedPath": None,
+        }
+    ]
+    state["pedestrianTracks"] = [
+        {
+            "id": "track-a",
+            "videoId": "video-ptsi-1",
+            "pedestrianId": 1,
+            "location": "EDSA Sec Walk",
+            "trajectorySamples": [[0, 0.2, 0.2, None]],
+        },
+        {
+            "id": "track-b",
+            "videoId": "video-ptsi-1",
+            "pedestrianId": 2,
+            "location": "EDSA Sec Walk",
+            "trajectorySamples": [[1, 0.35, 0.35, 2]],
+        },
+        {
+            "id": "track-c",
+            "videoId": "video-ptsi-1",
+            "pedestrianId": 3,
+            "location": "EDSA Sec Walk",
+            "trajectorySamples": [[1, 0.45, 0.45, None]],
+        },
+    ]
+    store.save_state(state)
+
+    with TestClient(main.app) as client:
+        response = client.get("/api/dashboard/occlusion", params={"date": "2026-03-17", "timeRange": "whole-day"})
+
+    assert response.status_code == 200
+    payload = response.json()
+    edsa_sec_walk = next(location for location in payload["locations"] if location["id"] == "edsa-sec-walk")
+
+    assert edsa_sec_walk["hasPTSIData"] is True
+    assert edsa_sec_walk["mode"] == "roi-testing"
+    assert edsa_sec_walk["score"] == pytest.approx(20.21, abs=0.01)
+    assert edsa_sec_walk["averagePedestrians"] == pytest.approx(1.5, abs=0.01)
+    assert edsa_sec_walk["uniquePedestrians"] == 3
+    assert edsa_sec_walk["occlusionMix"] == {
+        "lightPercent": pytest.approx(0.0, abs=0.01),
+        "moderatePercent": pytest.approx(0.0, abs=0.01),
+        "heavyPercent": pytest.approx(33.3, abs=0.1),
+    }
+    assert edsa_sec_walk["hourlyScores"] == [
+        {
+            "hour": "10:00",
+            "score": pytest.approx(20.21, abs=0.01),
+            "mode": "roi-testing",
+            "averagePedestrians": pytest.approx(1.5, abs=0.01),
+            "uniquePedestrians": 3,
+            "occlusionMix": {
+                "lightPercent": pytest.approx(0.0, abs=0.01),
+                "moderatePercent": pytest.approx(0.0, abs=0.01),
+                "heavyPercent": pytest.approx(33.3, abs=0.1),
+            },
+        }
+    ]
 
 
 def test_dashboard_traffic_uses_full_track_totals_instead_of_truncated_events(monkeypatch, tmp_path: Path) -> None:

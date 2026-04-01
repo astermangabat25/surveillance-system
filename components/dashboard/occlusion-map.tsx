@@ -67,6 +67,27 @@ function resolveHourlyScore(location: PTSILocation, hourFilter: string) {
   return location.hourlyScores.find((item) => item.hour === hourFilter)?.score ?? null
 }
 
+function resolveSelectedHourData(location: PTSILocation, hourFilter: string) {
+  if (hourFilter === "all") {
+    return {
+      score: location.score ?? null,
+      mode: location.mode ?? null,
+      averagePedestrians: location.averagePedestrians ?? null,
+      uniquePedestrians: location.uniquePedestrians ?? null,
+      occlusionMix: location.occlusionMix ?? null,
+    }
+  }
+
+  const hourData = location.hourlyScores.find((item) => item.hour === hourFilter)
+  return {
+    score: hourData?.score ?? null,
+    mode: hourData?.mode ?? location.mode ?? null,
+    averagePedestrians: hourData?.averagePedestrians ?? null,
+    uniquePedestrians: hourData?.uniquePedestrians ?? null,
+    occlusionMix: hourData?.occlusionMix ?? null,
+  }
+}
+
 function resolveState(location: PTSILocation, hourFilter: string): PTSIState {
   if (hourFilter === "all") {
     return location.state
@@ -113,6 +134,39 @@ function describeState(state: PTSIState, score: number | null) {
 
   const label = state === "clear" ? "Low severity" : state === "moderate" ? "Moderate severity" : "High severity"
   return `${label} · PTSI ${score?.toFixed(1) ?? "0.0"}%`
+}
+
+function formatModeLabel(mode: PTSILocation["mode"]) {
+  if (mode === "strict-fhwa") {
+    return "Strict FHWA"
+  }
+  if (mode === "roi-testing") {
+    return "ROI Testing"
+  }
+  return "Unknown"
+}
+
+function formatPedestrianMetric(value: number | null | undefined) {
+  if (value == null || !Number.isFinite(value)) {
+    return "—"
+  }
+  return Number.isInteger(value) ? `${value}` : value.toFixed(1)
+}
+
+function formatOcclusionMix(location: PTSILocation, hourFilter: string) {
+  const mix = resolveSelectedHourData(location, hourFilter).occlusionMix
+  if (!mix) {
+    return "—"
+  }
+
+  return `L ${mix.lightPercent.toFixed(0)}% · M ${mix.moderatePercent.toFixed(0)}% · H ${mix.heavyPercent.toFixed(0)}%`
+}
+
+function formatPeakHourSummary(hour: string | null | undefined, score: number | null | undefined) {
+  if (!hour || score == null) {
+    return "—"
+  }
+  return `${formatHourLabel(hour)} · ${score.toFixed(1)}%`
 }
 
 function getTooltipPlacement(x: number, y: number): { style: CSSProperties; className: string } {
@@ -426,7 +480,7 @@ export function OcclusionMap({ hourFilter, onHourFilterChange, data, loading = f
                 </button>
               </TooltipTrigger>
               <TooltipContent side="bottom" sideOffset={8} className="max-w-72 rounded-xl px-3 py-2 text-xs">
-                PTSI uses the 90th percentile of 100 × (0.85 × congestion + 0.15 × occlusion). Congestion follows FHWA/HCM-inspired space-per-pedestrian thresholds using ROI-qualified pedestrians and the configured walkable area.
+                PTSI uses the 90th percentile of 100 × (0.85 × congestion + 0.15 × occlusion). Strict FHWA mode uses walkable area and space-per-pedestrian bands; ROI Testing mode uses ROI-qualified counts against a capacity proxy.
               </TooltipContent>
             </Tooltip>
           </div>
@@ -506,7 +560,7 @@ export function OcclusionMap({ hourFilter, onHourFilterChange, data, loading = f
 
                   <button
                     type="button"
-                    aria-label={`Show occlusion details for ${location.name}`}
+                    aria-label={`Show PTSI details for ${location.name}`}
                     className="absolute z-20 flex h-8 w-8 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full outline-none transition-transform hover:scale-105 focus-visible:scale-105 focus-visible:ring-2 focus-visible:ring-white/70"
                     style={{
                       left: `${pos.x}%`,
@@ -546,14 +600,29 @@ export function OcclusionMap({ hourFilter, onHourFilterChange, data, loading = f
                   </div>
 
                   <div
-                    className={`pointer-events-none absolute z-30 w-44 max-w-[calc(100%-1.5rem)] rounded-xl border border-border bg-popover px-3 py-2 text-xs text-popover-foreground shadow-elevated transition-opacity ${tooltipPlacement.className} ${isHovered ? "opacity-100" : "opacity-0"}`}
+                    className={`pointer-events-none absolute z-30 w-56 max-w-[calc(100%-1.5rem)] rounded-xl border border-border bg-popover px-3 py-2 text-xs text-popover-foreground shadow-elevated transition-opacity ${tooltipPlacement.className} ${isHovered ? "opacity-100" : "opacity-0"}`}
                     style={tooltipPlacement.style}
                   >
+                    {(() => {
+                      const detail = resolveSelectedHourData(location, hourFilter)
+                      return (
+                        <>
                     <p className="font-medium text-foreground">{location.name}</p>
-                    <p className="mt-1 text-muted-foreground">{describeState(state, score)}</p>
-                    <p className="mt-1 text-[11px] text-muted-foreground">
-                      {hourFilter === "all" ? "Peak hour across the selected range" : `Hour window: ${formatHourLabel(hourFilter)}`}
-                    </p>
+                          <p className="mt-1 text-muted-foreground">{describeState(state, score)}</p>
+                          <p className="mt-1 text-[11px] text-muted-foreground">
+                            {hourFilter === "all" ? "Peak hour across the selected range" : `Selected hour: ${formatHourLabel(hourFilter)}`}
+                          </p>
+                          <div className="mt-2 space-y-1 text-[11px] text-muted-foreground">
+                            <p><span className="font-medium text-foreground">Mode:</span> {formatModeLabel(detail.mode)}</p>
+                            <p><span className="font-medium text-foreground">Avg pedestrians:</span> {formatPedestrianMetric(detail.averagePedestrians)}</p>
+                            <p><span className="font-medium text-foreground">Unique pedestrians:</span> {formatPedestrianMetric(detail.uniquePedestrians)}</p>
+                            <p><span className="font-medium text-foreground">Occlusion mix:</span> {formatOcclusionMix(location, hourFilter)}</p>
+                            <p><span className="font-medium text-foreground">Peak hour:</span> {formatPeakHourSummary(location.peakHour, location.peakHourScore)}</p>
+                            <p><span className="font-medium text-foreground">Off-peak:</span> {formatPeakHourSummary(location.offPeakHour, location.offPeakHourScore)}</p>
+                          </div>
+                        </>
+                      )
+                    })()}
                   </div>
                 </Fragment>
               )
