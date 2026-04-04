@@ -83,6 +83,27 @@ function SearchContent() {
     }
   }, [hideLoader, query, showLoader, updateLoader])
 
+  const groupedVideoMatchOffsets = useMemo(() => {
+    const byVideo = new Map<string, number[]>()
+
+    for (const result of results) {
+      if (typeof result.offsetSeconds !== "number") {
+        continue
+      }
+
+      const roundedOffset = Math.max(0, Math.round(result.offsetSeconds * 10) / 10)
+      const offsets = byVideo.get(result.videoId) ?? []
+      offsets.push(roundedOffset)
+      byVideo.set(result.videoId, offsets)
+    }
+
+    for (const [videoId, offsets] of byVideo) {
+      byVideo.set(videoId, Array.from(new Set(offsets)).sort((left, right) => left - right))
+    }
+
+    return byVideo
+  }, [results])
+
   return (
     <div className="flex flex-col h-full">
       {/* Header */}
@@ -139,6 +160,7 @@ function SearchContent() {
                 key={result.id} 
                 result={result} 
                 index={index + 1}
+                searchOffsets={groupedVideoMatchOffsets.get(result.videoId) ?? []}
               />
             ))
           ) : (
@@ -157,10 +179,12 @@ function SearchContent() {
 
 function SearchResultCard({ 
   result, 
-  index 
+  index,
+  searchOffsets,
 }: { 
   result: SearchResult
   index: number 
+  searchOffsets: number[]
 }) {
   const [thumbnailFailed, setThumbnailFailed] = useState(false)
   const [previewFailed, setPreviewFailed] = useState(false)
@@ -180,11 +204,26 @@ function SearchResultCard({
   )
   const showVisualSummary = Boolean(result.visualSummary && !result.appearanceSummary?.includes(result.visualSummary))
   const footageHref = useMemo(() => {
+    const params = new URLSearchParams()
+    const sameVideoOffsets = Array.from(
+      new Set(
+        [...searchOffsets, ...(typeof result.offsetSeconds === "number" ? [result.offsetSeconds] : [])]
+          .filter((offset): offset is number => Number.isFinite(offset))
+          .map((offset) => Math.max(0, Math.round(offset * 10) / 10)),
+      ),
+    ).sort((left, right) => left - right)
+
     if (typeof result.offsetSeconds === "number") {
-      return `/video/${result.videoId}?seek=${encodeURIComponent(String(result.offsetSeconds))}`
+      params.set("seek", String(result.offsetSeconds))
     }
-    return `/video/${result.videoId}`
-  }, [result.offsetSeconds, result.videoId])
+
+    if (sameVideoOffsets.length > 0) {
+      params.set("matches", sameVideoOffsets.join(","))
+    }
+
+    const queryString = params.toString()
+    return queryString ? `/video/${result.videoId}?${queryString}` : `/video/${result.videoId}`
+  }, [result.offsetSeconds, result.videoId, searchOffsets])
   const showImage = Boolean(thumbnailUrl && !thumbnailFailed)
   const showPreviewVideo = Boolean(!showImage && previewUrl && !previewFailed)
   const semanticScoreText = semanticPercent(result.semanticScore)

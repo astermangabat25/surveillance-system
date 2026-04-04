@@ -54,6 +54,22 @@ export interface VideoRecord {
   pedestrianCount: number
   rawPath?: string | null
   processedPath?: string | null
+  severitySummary?: VideoSeveritySummary | null
+}
+
+export type VideoSeverityLevel = "neutral" | "light" | "moderate" | "heavy"
+
+export interface VideoSeverityBucket {
+  startOffsetSeconds: number
+  endOffsetSeconds: number
+  severity: VideoSeverityLevel
+  score?: number | null
+}
+
+export interface VideoSeveritySummary {
+  bucketCount: number
+  sampledSeconds: number
+  buckets: VideoSeverityBucket[]
 }
 
 export interface EventRecord {

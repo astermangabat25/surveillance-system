@@ -99,6 +99,77 @@ def test_box_xyxy_accepts_multi_value_tensor_like_objects() -> None:
     assert inference._box_xyxy(FakeBox()) == (10, 20, 31, 41)
 
 
+def test_video_detail_includes_compact_timeline_severity_summary(monkeypatch, tmp_path: Path) -> None:
+    configure_temp_storage(monkeypatch, tmp_path)
+
+    state = store.seed_state()
+    state["locations"] = [
+        {
+            "id": "timeline-walk",
+            "name": "Timeline Walk",
+            "latitude": 14.6397,
+            "longitude": 121.0775,
+            "description": "",
+            "address": "",
+            "roiCoordinates": None,
+            "walkableAreaM2": 4.0,
+            "videos": [],
+        }
+    ]
+    state["videos"] = [
+        {
+            "id": "video-timeline",
+            "locationId": "timeline-walk",
+            "location": "Timeline Walk",
+            "timestamp": "10:00:00",
+            "date": "2026-03-17",
+            "startTime": "10:00:00",
+            "endTime": "10:00:12",
+            "gpsLat": 14.6397,
+            "gpsLng": 121.0775,
+            "pedestrianCount": 3,
+            "rawPath": None,
+            "processedPath": None,
+        }
+    ]
+    state["pedestrianTracks"] = [
+        {
+            "id": "track-1",
+            "videoId": "video-timeline",
+            "pedestrianId": 1,
+            "trajectorySamples": [[0, 0.2, 0.2, 0], [1, 0.2, 0.2, 0], [2, 0.2, 0.2, 0], [3, 0.2, 0.2, 0], [4, 0.2, 0.2, 1], [5, 0.2, 0.2, 1], [6, 0.2, 0.2, 1], [7, 0.2, 0.2, 1], [8, 0.2, 0.2, 2], [9, 0.2, 0.2, 2], [10, 0.2, 0.2, 2], [11, 0.2, 0.2, 2]],
+        },
+        {
+            "id": "track-2",
+            "videoId": "video-timeline",
+            "pedestrianId": 2,
+            "trajectorySamples": [[4, 0.4, 0.4, 1], [5, 0.4, 0.4, 1], [6, 0.4, 0.4, 1], [7, 0.4, 0.4, 1], [8, 0.4, 0.4, 2], [9, 0.4, 0.4, 2], [10, 0.4, 0.4, 2], [11, 0.4, 0.4, 2]],
+        },
+        {
+            "id": "track-3",
+            "videoId": "video-timeline",
+            "pedestrianId": 3,
+            "trajectorySamples": [[8, 0.6, 0.6, 2], [9, 0.6, 0.6, 2], [10, 0.6, 0.6, 2], [11, 0.6, 0.6, 2]],
+        },
+    ]
+    store.save_state(state)
+
+    with TestClient(main.app) as client:
+        response = client.get("/api/videos/video-timeline")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["severitySummary"]["bucketCount"] == 12
+    assert body["severitySummary"]["sampledSeconds"] == 12
+    buckets = body["severitySummary"]["buckets"]
+    assert [(bucket["startOffsetSeconds"], bucket["endOffsetSeconds"], bucket["severity"]) for bucket in buckets] == [
+        (0.0, 4.0, "light"),
+        (4.0, 8.0, "moderate"),
+        (8.0, 12.0, "heavy"),
+    ]
+    assert [bucket["score"] for bucket in buckets] == pytest.approx([22.0, 61.0, 83.0], abs=0.01)
+
+
 def test_enrich_track_summaries_with_vision_appends_visual_metadata(monkeypatch, tmp_path: Path) -> None:
     configure_temp_storage(monkeypatch, tmp_path)
 
@@ -2139,6 +2210,80 @@ def test_dashboard_occlusion_uses_per_second_trajectory_samples_for_ptsi(monkeyp
             "losDescription": "very high pedestrian space, free movement",
         }
     ]
+
+
+def test_dashboard_occlusion_all_hours_summary_uses_selected_range_totals(monkeypatch, tmp_path: Path) -> None:
+    configure_temp_storage(monkeypatch, tmp_path)
+
+    state = store.seed_state()
+    for location in state["locations"]:
+        if location["id"] == "edsa-sec-walk":
+            location["roiCoordinates"] = {
+                "referenceSize": [1920, 1080],
+                "includePolygonsNorm": [[[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]],
+            }
+            location["walkableAreaM2"] = None
+
+    state["videos"] = [
+        {
+            "id": "video-ptsi-all-hours",
+            "locationId": "edsa-sec-walk",
+            "location": "EDSA Sec Walk",
+            "timestamp": "10:00",
+            "date": "2026-03-17",
+            "startTime": "10:00",
+            "endTime": "12:00",
+            "gpsLat": 14.6397,
+            "gpsLng": 121.0775,
+            "pedestrianCount": 3,
+            "rawPath": None,
+            "processedPath": None,
+        }
+    ]
+    state["pedestrianTracks"] = [
+        {
+            "id": "track-all-hours-a",
+            "videoId": "video-ptsi-all-hours",
+            "pedestrianId": 1,
+            "location": "EDSA Sec Walk",
+            "trajectorySamples": [[0, 0.2, 0.2, None], [3600, 0.2, 0.2, None]],
+        },
+        {
+            "id": "track-all-hours-b",
+            "videoId": "video-ptsi-all-hours",
+            "pedestrianId": 2,
+            "location": "EDSA Sec Walk",
+            "trajectorySamples": [[0, 0.35, 0.35, None]],
+        },
+        {
+            "id": "track-all-hours-c",
+            "videoId": "video-ptsi-all-hours",
+            "pedestrianId": 3,
+            "location": "EDSA Sec Walk",
+            "trajectorySamples": [[3600, 0.45, 0.45, 2]],
+        },
+    ]
+    store.save_state(state)
+
+    with TestClient(main.app) as client:
+        response = client.get("/api/dashboard/occlusion", params={"date": "2026-03-17", "timeRange": "whole-day"})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert {"10:00", "11:00"}.issubset(set(payload["availableHours"]))
+
+    edsa_sec_walk = next(location for location in payload["locations"] if location["id"] == "edsa-sec-walk")
+    ten_oclock = next(score for score in edsa_sec_walk["hourlyScores"] if score["hour"] == "10:00")
+    eleven_oclock = next(score for score in edsa_sec_walk["hourlyScores"] if score["hour"] == "11:00")
+
+    assert ten_oclock["uniquePedestrians"] == 2
+    assert eleven_oclock["uniquePedestrians"] == 2
+    assert edsa_sec_walk["peakHour"] == "11:00"
+    assert edsa_sec_walk["offPeakHour"] == "10:00"
+    assert edsa_sec_walk["peakHourScore"] == pytest.approx(eleven_oclock["score"], abs=0.01)
+    assert edsa_sec_walk["uniquePedestrians"] == 3
+    assert edsa_sec_walk["averagePedestrians"] == pytest.approx(2.0, abs=0.01)
+    assert edsa_sec_walk["uniquePedestrians"] > eleven_oclock["uniquePedestrians"]
 
 
 @pytest.mark.parametrize(

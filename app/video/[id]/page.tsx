@@ -115,6 +115,21 @@ function VideoDetailContent({ params }: { params: Promise<{ id: string }> }) {
     [events],
   )
 
+  const searchMatchOffsets = useMemo(() => {
+    const rawMatches = searchParams.get("matches")
+    const parsedMatches = (rawMatches ?? "")
+      .split(",")
+      .map((value) => Number(value.trim()))
+      .filter((value) => Number.isFinite(value) && value >= 0)
+
+    if (parsedMatches.length > 0) {
+      return Array.from(new Set(parsedMatches)).sort((left, right) => left - right)
+    }
+
+    const seekValue = Number(searchParams.get("seek"))
+    return Number.isFinite(seekValue) && seekValue >= 0 ? [seekValue] : []
+  }, [searchParams])
+
   const detectionDetails = useMemo(() => {
     const seen = new Set<number>()
 
@@ -326,6 +341,8 @@ function VideoDetailContent({ params }: { params: Promise<{ id: string }> }) {
               durationSeconds={durationSeconds}
               currentTimeSeconds={currentTimeSeconds}
               events={orderedEvents}
+              severityBuckets={video.severitySummary?.buckets ?? []}
+              searchMatchOffsets={searchMatchOffsets}
               onSeek={requestSeek}
             />
             

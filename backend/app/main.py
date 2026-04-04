@@ -245,9 +245,9 @@ def get_videos() -> list[dict]:
     return store.list_videos()
 
 
-@app.get("/api/videos/{video_id}", response_model=schemas.VideoRecord)
+@app.get("/api/videos/{video_id}", response_model=schemas.VideoDetailRecord)
 def get_video(video_id: str) -> dict:
-    video = store.get_video(video_id)
+    video = store.get_video_detail(video_id)
     if video is None:
         raise HTTPException(status_code=404, detail="Video not found")
     return video

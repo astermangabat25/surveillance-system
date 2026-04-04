@@ -69,15 +69,14 @@ function resolveHourlyScore(location: PTSILocation, hourFilter: string) {
 
 function resolveSelectedHourData(location: PTSILocation, hourFilter: string) {
   if (hourFilter === "all") {
-    const peakHourData = location.peakHour ? location.hourlyScores.find((item) => item.hour === location.peakHour) : null
     return {
-      score: peakHourData?.score ?? location.score ?? null,
-      mode: peakHourData?.mode ?? location.mode ?? null,
-      averagePedestrians: peakHourData?.averagePedestrians ?? location.averagePedestrians ?? null,
-      uniquePedestrians: peakHourData?.uniquePedestrians ?? location.uniquePedestrians ?? null,
-      occlusionMix: peakHourData?.occlusionMix ?? location.occlusionMix ?? null,
-      los: peakHourData?.los ?? location.los ?? null,
-      losDescription: peakHourData?.losDescription ?? location.losDescription ?? null,
+      score: location.score ?? null,
+      mode: location.mode ?? null,
+      averagePedestrians: location.averagePedestrians ?? null,
+      uniquePedestrians: location.uniquePedestrians ?? null,
+      occlusionMix: location.occlusionMix ?? null,
+      los: location.los ?? null,
+      losDescription: location.losDescription ?? null,
     }
   }
 
@@ -428,9 +427,31 @@ function LegendItem({ color, label, detail }: { color: string; label: string; de
 export function OcclusionMap({ hourFilter, onHourFilterChange, data, loading = false }: OcclusionMapProps) {
   const [hoveredLocationId, setHoveredLocationId] = useState<string | null>(null)
   const mapContainerRef = useRef<HTMLDivElement | null>(null)
+  const hoverCloseTimeoutRef = useRef<number | null>(null)
   const [mapDimensions, setMapDimensions] = useState<MapDimensions>(DEFAULT_MAP_DIMENSIONS)
   const locations = data?.locations ?? []
   const availableHours = data?.availableHours ?? []
+
+  const clearHoverCloseTimeout = () => {
+    if (hoverCloseTimeoutRef.current !== null) {
+      window.clearTimeout(hoverCloseTimeoutRef.current)
+      hoverCloseTimeoutRef.current = null
+    }
+  }
+
+  const openLocationDetails = (locationId: string) => {
+    clearHoverCloseTimeout()
+    setHoveredLocationId(locationId)
+  }
+
+  const scheduleLocationDetailsClose = (locationId: string) => {
+    clearHoverCloseTimeout()
+    hoverCloseTimeoutRef.current = window.setTimeout(() => {
+      setHoveredLocationId((current) => (current === locationId ? null : current))
+      hoverCloseTimeoutRef.current = null
+    }, 180)
+  }
+
   const plottedLocations = useMemo<PlottedLocation[]>(() => {
     const minLat = locations.length > 0 ? Math.min(...locations.map((location) => location.latitude)) : 0
     const maxLat = locations.length > 0 ? Math.max(...locations.map((location) => location.latitude)) : 1
@@ -502,6 +523,12 @@ export function OcclusionMap({ hourFilter, onHourFilterChange, data, loading = f
     return () => observer.disconnect()
   }, [])
 
+  useEffect(() => {
+    return () => {
+      clearHoverCloseTimeout()
+    }
+  }, [])
+
   return (
     <div className="rounded-3xl border border-border bg-card p-6 shadow-elevated">
       <div className="mb-4 flex items-center justify-between gap-4">
@@ -519,7 +546,7 @@ export function OcclusionMap({ hourFilter, onHourFilterChange, data, loading = f
               </TooltipContent>
             </Tooltip>
           </div>
-          <p className="text-sm text-muted-foreground">LOS-based interpretation first, with PTSI shown as supporting detail</p>
+          <p className="text-sm text-muted-foreground">LOS-first interpretation using ROI-qualified pedestrian tracks, with PTSI shown as supporting detail</p>
         </div>
 
         <Select value={hourFilter} onValueChange={onHourFilterChange}>
@@ -538,29 +565,31 @@ export function OcclusionMap({ hourFilter, onHourFilterChange, data, loading = f
         </Select>
       </div>
 
-      <div ref={mapContainerRef} className="relative h-72 overflow-hidden rounded-2xl border border-white/5 bg-[#0f172a]">
-        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_left,_rgba(56,189,248,0.12),_transparent_34%),radial-gradient(circle_at_bottom_right,_rgba(34,197,94,0.12),_transparent_30%)]" />
-        <svg viewBox="0 0 100 70" className="pointer-events-none absolute inset-0 h-full w-full opacity-70">
-          <path d="M8 50 L18 16 L36 12 L56 16 L72 22 L88 34 L90 58 L14 60 Z" fill="rgba(15,23,42,0.9)" stroke="rgba(148,163,184,0.22)" strokeWidth="1.2" />
-          <path d="M10 19 L30 12 L48 14" fill="none" stroke="rgba(59,130,246,0.28)" strokeWidth="1.2" strokeDasharray="4 3" />
-          <path d="M18 30 L40 24 L56 30 L76 40" fill="none" stroke="rgba(148,163,184,0.18)" strokeWidth="1.2" strokeDasharray="4 3" />
-          <rect x="22" y="18" width="14" height="10" rx="2" fill="rgba(30,41,59,0.75)" stroke="rgba(148,163,184,0.18)" />
-          <rect x="40" y="20" width="13" height="9" rx="2" fill="rgba(30,41,59,0.7)" stroke="rgba(148,163,184,0.18)" />
-          <rect x="60" y="26" width="12" height="8" rx="2" fill="rgba(30,41,59,0.7)" stroke="rgba(148,163,184,0.18)" />
-          {campusSpine && <path d={campusSpine} fill="none" stroke="rgba(34,197,94,0.36)" strokeWidth="2.4" strokeLinecap="round" />}
-        </svg>
+      <div ref={mapContainerRef} className="relative isolate h-72">
+        <div className="absolute inset-0 overflow-hidden rounded-2xl border border-white/5 bg-[#0f172a]">
+          <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_left,_rgba(56,189,248,0.12),_transparent_34%),radial-gradient(circle_at_bottom_right,_rgba(34,197,94,0.12),_transparent_30%)]" />
+          <svg viewBox="0 0 100 70" className="pointer-events-none absolute inset-0 h-full w-full opacity-70">
+            <path d="M8 50 L18 16 L36 12 L56 16 L72 22 L88 34 L90 58 L14 60 Z" fill="rgba(15,23,42,0.9)" stroke="rgba(148,163,184,0.22)" strokeWidth="1.2" />
+            <path d="M10 19 L30 12 L48 14" fill="none" stroke="rgba(59,130,246,0.28)" strokeWidth="1.2" strokeDasharray="4 3" />
+            <path d="M18 30 L40 24 L56 30 L76 40" fill="none" stroke="rgba(148,163,184,0.18)" strokeWidth="1.2" strokeDasharray="4 3" />
+            <rect x="22" y="18" width="14" height="10" rx="2" fill="rgba(30,41,59,0.75)" stroke="rgba(148,163,184,0.18)" />
+            <rect x="40" y="20" width="13" height="9" rx="2" fill="rgba(30,41,59,0.7)" stroke="rgba(148,163,184,0.18)" />
+            <rect x="60" y="26" width="12" height="8" rx="2" fill="rgba(30,41,59,0.7)" stroke="rgba(148,163,184,0.18)" />
+            {campusSpine && <path d={campusSpine} fill="none" stroke="rgba(34,197,94,0.36)" strokeWidth="2.4" strokeLinecap="round" />}
+          </svg>
 
-        <div className="pointer-events-none absolute inset-0">
-          {[0, 25, 50, 75, 100].map((percent) => (
-            <div key={`h-${percent}`} className="absolute w-full border-t border-white/6" style={{ top: `${percent}%` }} />
-          ))}
-          {[0, 25, 50, 75, 100].map((percent) => (
-            <div key={`v-${percent}`} className="absolute h-full border-l border-white/6" style={{ left: `${percent}%` }} />
-          ))}
+          <div className="pointer-events-none absolute inset-0">
+            {[0, 25, 50, 75, 100].map((percent) => (
+              <div key={`h-${percent}`} className="absolute w-full border-t border-white/6" style={{ top: `${percent}%` }} />
+            ))}
+            {[0, 25, 50, 75, 100].map((percent) => (
+              <div key={`v-${percent}`} className="absolute h-full border-l border-white/6" style={{ left: `${percent}%` }} />
+            ))}
+          </div>
         </div>
 
         {loading ? (
-          <div className="relative z-10 flex h-full items-center justify-center text-sm text-slate-300">
+          <div className="absolute inset-0 z-10 flex items-center justify-center rounded-2xl text-sm text-slate-300">
             <Loader2 className="mr-2 h-4 w-4 animate-spin" />
             Calculating PTSI map...
           </div>
@@ -602,11 +631,14 @@ export function OcclusionMap({ hourFilter, onHourFilterChange, data, loading = f
                       top: `${pos.y}%`,
                       opacity: state === "no-footage" ? 0.85 : 1,
                     }}
-                    onMouseEnter={() => setHoveredLocationId(location.id)}
-                    onMouseLeave={() => setHoveredLocationId((current) => (current === location.id ? null : current))}
-                    onClick={() => setHoveredLocationId((current) => (current === location.id ? null : location.id))}
-                    onFocus={() => setHoveredLocationId(location.id)}
-                    onBlur={() => setHoveredLocationId((current) => (current === location.id ? null : current))}
+                    onMouseEnter={() => openLocationDetails(location.id)}
+                    onMouseLeave={() => scheduleLocationDetailsClose(location.id)}
+                    onClick={() => {
+                      clearHoverCloseTimeout()
+                      setHoveredLocationId((current) => (current === location.id ? null : location.id))
+                    }}
+                    onFocus={() => openLocationDetails(location.id)}
+                    onBlur={() => scheduleLocationDetailsClose(location.id)}
                   >
                     <span
                       className="absolute h-6 w-6 rounded-full"
@@ -635,27 +667,32 @@ export function OcclusionMap({ hourFilter, onHourFilterChange, data, loading = f
                   </div>
 
                   <div
-                    className={`pointer-events-none absolute z-30 w-56 max-w-[calc(100%-1.5rem)] rounded-xl border border-border bg-popover px-3 py-2 text-xs text-popover-foreground shadow-elevated transition-opacity ${tooltipPlacement.className} ${isHovered ? "opacity-100" : "opacity-0"}`}
+                    className={`absolute z-30 w-64 max-w-[calc(100%-1.5rem)] overflow-hidden rounded-2xl border border-border/80 bg-popover/95 px-3 py-2 text-xs text-popover-foreground shadow-elevated backdrop-blur-md transition-[opacity,transform] duration-150 ease-out ${tooltipPlacement.className} ${isHovered ? "pointer-events-auto translate-y-0 scale-100 opacity-100" : "pointer-events-none translate-y-1 scale-[0.98] opacity-0"}`}
                     style={tooltipPlacement.style}
+                    onMouseEnter={() => openLocationDetails(location.id)}
+                    onMouseLeave={() => scheduleLocationDetailsClose(location.id)}
                   >
                     {(() => {
                       const detail = resolveSelectedHourData(location, hourFilter)
                       return (
-                        <>
-                    <p className="font-medium text-foreground">{location.name}</p>
+                        <div className="smooth-scrollbar max-h-72 overflow-y-auto overscroll-contain pr-2">
+                          <p className="font-medium text-foreground">{location.name}</p>
                           <p className="mt-1 text-muted-foreground">{describeState(state, detail)}</p>
                           <p className="mt-1 text-[11px] text-muted-foreground">
-                            {hourFilter === "all" ? "Peak hour across the selected range" : `Selected hour: ${formatHourLabel(hourFilter)}`}
+                            {hourFilter === "all" ? "All hours across the selected range" : `Selected hour: ${formatHourLabel(hourFilter)}`}
                           </p>
                           <div className="mt-2 space-y-1 text-[11px] text-muted-foreground">
                             <p><span className="font-medium text-foreground">Mode:</span> {formatModeLabel(detail.mode)}</p>
                             <p><span className="font-medium text-foreground">Avg pedestrians:</span> {formatPedestrianMetric(detail.averagePedestrians)}</p>
-                            <p><span className="font-medium text-foreground">Unique pedestrians:</span> {formatPedestrianMetric(detail.uniquePedestrians)}</p>
+                            <p><span className="font-medium text-foreground">PTSI-qualified pedestrians:</span> {formatPedestrianMetric(detail.uniquePedestrians)}</p>
                             <p><span className="font-medium text-foreground">Occlusion mix:</span> {formatOcclusionMix(location, hourFilter)}</p>
                             <p><span className="font-medium text-foreground">Peak hour:</span> {formatHourConditionSummary(location, location.peakHour)}</p>
                             <p><span className="font-medium text-foreground">Off-peak:</span> {formatHourConditionSummary(location, location.offPeakHour)}</p>
                           </div>
-                        </>
+                          <p className="mt-3 border-t border-border/70 pt-2 text-[11px] leading-relaxed text-muted-foreground">
+                            PTSI counts only tracks with trajectory samples inside this location&apos;s ROI, so this total can be lower than the dashboard-wide tracked pedestrian count above.
+                          </p>
+                        </div>
                       )
                     })()}
                   </div>
@@ -668,7 +705,7 @@ export function OcclusionMap({ hourFilter, onHourFilterChange, data, loading = f
       </div>
 
       <div className="mt-4 rounded-2xl border border-border/60 bg-secondary/40 p-3 text-xs text-muted-foreground">
-        Map labels are shortened to keep names readable as more locations are added. Neutral markers mean there is either no footage for that location on the selected date or no ROI-qualified pedestrian traffic data for the chosen hour.
+        Map labels are shortened to keep names readable as more locations are added. Neutral markers mean there is either no footage for that location on the selected date or no ROI-qualified pedestrian traffic data for the chosen hour. PTSI totals only include ROI-qualified tracks, so they may be lower than the dashboard&apos;s tracked pedestrian total.
       </div>
 
       {plottedLocations.length > 0 && (
@@ -695,11 +732,14 @@ export function OcclusionMap({ hourFilter, onHourFilterChange, data, loading = f
                   key={`key-${location.id}`}
                   type="button"
                   className={`flex w-full items-start gap-3 rounded-xl border px-3 py-2 text-left transition-colors ${isHovered ? "border-primary/40 bg-background/85 shadow-sm" : "border-border/60 bg-background/45 hover:bg-background/75"}`}
-                  onMouseEnter={() => setHoveredLocationId(location.id)}
-                  onMouseLeave={() => setHoveredLocationId((current) => (current === location.id ? null : current))}
-                  onFocus={() => setHoveredLocationId(location.id)}
-                  onBlur={() => setHoveredLocationId((current) => (current === location.id ? null : current))}
-                  onClick={() => setHoveredLocationId((current) => (current === location.id ? null : location.id))}
+                  onMouseEnter={() => openLocationDetails(location.id)}
+                  onMouseLeave={() => scheduleLocationDetailsClose(location.id)}
+                  onFocus={() => openLocationDetails(location.id)}
+                  onBlur={() => scheduleLocationDetailsClose(location.id)}
+                  onClick={() => {
+                    clearHoverCloseTimeout()
+                    setHoveredLocationId((current) => (current === location.id ? null : location.id))
+                  }}
                 >
                   <span
                     className="mt-0.5 inline-flex max-w-[5.75rem] items-center justify-center rounded-full border px-2 py-1 text-[10px] font-semibold leading-none"

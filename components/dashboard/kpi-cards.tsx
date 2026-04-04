@@ -11,9 +11,9 @@ interface KPICardsProps {
 export function KPICards({ summary, loading = false }: KPICardsProps) {
   const kpis = [
     {
-      label: "Total Pedestrians",
+      label: "Tracked Pedestrians",
       value: loading ? "--" : (summary?.totalUniquePedestrians ?? 0).toLocaleString(),
-      hint: "Unique tracked pedestrians for the selected date",
+      hint: "All unique pedestrian tracks counted for the selected date",
       icon: Users,
       color: "primary",
     },

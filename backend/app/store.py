@@ -25,6 +25,7 @@ EXPORTS_DIR = STORAGE_DIR / "exports"
 DATA_FILE = STORAGE_DIR / "dev_data.json"
 CLOCK_TIME_FORMATS = ("%H:%M", "%H:%M:%S", "%I:%M %p", "%I:%M:%S %p")
 MIN_DRILLDOWN_BUCKET_MINUTES = 5
+VIDEO_TIMELINE_MAX_BUCKETS = 120
 OWDI_CLASS_WEIGHTS = {0: 1, 1: 2, 2: 3}
 PTSI_OCCLUSION_WEIGHTS = {0: 1, 1: 2, 2: 3}
 PTSI_CONGESTION_WEIGHT = 0.85
@@ -549,6 +550,17 @@ def get_video(video_id: str) -> Optional[dict[str, Any]]:
     return next((video for video in load_state()["videos"] if video["id"] == video_id), None)
 
 
+def get_video_detail(video_id: str) -> Optional[dict[str, Any]]:
+    state = load_state()
+    video = next((item for item in state["videos"] if item["id"] == video_id), None)
+    if video is None:
+        return None
+
+    detail = deepcopy(video)
+    detail["severitySummary"] = _video_severity_summary(state, detail)
+    return detail
+
+
 def add_video(payload: dict[str, Any]) -> dict[str, Any]:
     state = load_state()
     location = next((item for item in state["locations"] if item["id"] == payload["locationId"]), None)
@@ -795,6 +807,25 @@ def _pedestrian_track_end_timestamp(track: dict[str, Any], video: dict[str, Any]
     except (TypeError, ValueError):
         return _pedestrian_track_timestamp(track, video)
     return observed_at + timedelta(seconds=offset_seconds)
+
+
+def _video_duration_seconds(video: dict[str, Any], pedestrian_tracks: list[dict[str, Any]]) -> int:
+    start_time = _observation_time(video)
+    end_time = _combine_date_and_time(str(video.get("date", "")), video.get("endTime"))
+
+    if start_time is not None and end_time is not None:
+        if end_time < start_time:
+            end_time += timedelta(days=1)
+        duration_seconds = int(math.ceil((end_time - start_time).total_seconds()))
+        if duration_seconds > 0:
+            return duration_seconds
+
+    max_offset_seconds = 0
+    for track in pedestrian_tracks:
+        for offset_second, _point, _occlusion_class in _normalized_trajectory_samples(track):
+            max_offset_seconds = max(max_offset_seconds, int(offset_second) + 1)
+
+    return max(1, max_offset_seconds)
 
 
 def _normalized_foot_point(track: dict[str, Any]) -> Optional[tuple[float, float]]:
@@ -1491,6 +1522,16 @@ def _percentile(values: list[float], percentile: float) -> float:
     return lower_value + ((upper_value - lower_value) * fraction)
 
 
+def _timeline_severity_from_score(score: Optional[float]) -> str:
+    if score is None:
+        return "neutral"
+    if score < 33:
+        return "light"
+    if score < 66:
+        return "moderate"
+    return "heavy"
+
+
 def _ptsi_congestion_score(visible_count: int, walkable_area_m2: Optional[float]) -> float:
     if visible_count <= 0:
         return 0.0
@@ -1627,6 +1668,93 @@ def _severity_state(score: Optional[float], has_footage: bool, has_occlusion_dat
     if score < 66:
         return "moderate"
     return "severe"
+
+
+def _video_severity_summary(state: dict[str, Any], video: dict[str, Any]) -> dict[str, Any]:
+    video_id = str(video.get("id") or "")
+    if not video_id:
+        return {"bucketCount": 0, "sampledSeconds": 0, "buckets": []}
+
+    pedestrian_tracks = [track for track in state.get("pedestrianTracks", []) if track.get("videoId") == video_id]
+    if not pedestrian_tracks:
+        return {"bucketCount": 0, "sampledSeconds": 0, "buckets": []}
+
+    location = next((item for item in state.get("locations", []) if item.get("id") == video.get("locationId")), {})
+    duration_seconds = _video_duration_seconds(video, pedestrian_tracks)
+    bucket_count = max(1, min(duration_seconds, max(24, int(math.ceil(duration_seconds / 3.0))), VIDEO_TIMELINE_MAX_BUCKETS))
+    bucket_span_seconds = max(float(duration_seconds) / float(bucket_count), 1.0)
+
+    second_metrics: dict[int, dict[str, Optional[int]]] = {}
+    for fallback_index, track in enumerate(pedestrian_tracks):
+        track_key = _tracked_pedestrian_track_key(track, video_id, fallback_index)
+        for offset_second, point, occlusion_class in _normalized_trajectory_samples(track):
+            if not _point_in_location_roi(point, location):
+                continue
+
+            second_tracks = second_metrics.setdefault(max(0, int(offset_second)), {})
+            existing_occlusion = second_tracks.get(track_key)
+            if existing_occlusion is None or (
+                occlusion_class is not None and (existing_occlusion is None or int(occlusion_class) > int(existing_occlusion))
+            ):
+                second_tracks[track_key] = occlusion_class
+
+    if not second_metrics:
+        return {"bucketCount": bucket_count, "sampledSeconds": 0, "buckets": []}
+
+    bucket_scores: list[list[float]] = [[] for _ in range(bucket_count)]
+    for offset_second, track_occlusions in sorted(second_metrics.items()):
+        visible_count = len(track_occlusions)
+        if visible_count <= 0:
+            continue
+
+        light_count = sum(1 for value in track_occlusions.values() if value == 0)
+        moderate_count = sum(1 for value in track_occlusions.values() if value == 1)
+        heavy_count = sum(1 for value in track_occlusions.values() if value == 2)
+        occlusion_value = (
+            (light_count * PTSI_OCCLUSION_WEIGHTS[0])
+            + (moderate_count * PTSI_OCCLUSION_WEIGHTS[1])
+            + (heavy_count * PTSI_OCCLUSION_WEIGHTS[2])
+        ) / (3.0 * visible_count)
+        second_score = float(_ptsi_score_breakdown(visible_count, location, occlusion_value)["score"])
+        bucket_index = min(bucket_count - 1, int(offset_second // bucket_span_seconds))
+        bucket_scores[bucket_index].append(second_score)
+
+    raw_buckets: list[dict[str, Any]] = []
+    for bucket_index, scores in enumerate(bucket_scores):
+        start_offset = round(bucket_index * bucket_span_seconds, 3)
+        end_offset = round(
+            float(duration_seconds) if bucket_index == bucket_count - 1 else min(float(duration_seconds), (bucket_index + 1) * bucket_span_seconds),
+            3,
+        )
+        if end_offset <= start_offset:
+            continue
+
+        bucket_score = round(_percentile(scores, 90), 2) if scores else None
+        raw_buckets.append(
+            {
+                "startOffsetSeconds": start_offset,
+                "endOffsetSeconds": end_offset,
+                "severity": _timeline_severity_from_score(bucket_score),
+                "score": bucket_score,
+            }
+        )
+
+    merged_buckets: list[dict[str, Any]] = []
+    for bucket in raw_buckets:
+        previous_bucket = merged_buckets[-1] if merged_buckets else None
+        if previous_bucket and previous_bucket["severity"] == bucket["severity"]:
+            previous_bucket["endOffsetSeconds"] = bucket["endOffsetSeconds"]
+            if bucket.get("score") is not None:
+                previous_score = previous_bucket.get("score")
+                previous_bucket["score"] = bucket["score"] if previous_score is None else round(max(float(previous_score), float(bucket["score"])), 2)
+            continue
+        merged_buckets.append(bucket)
+
+    return {
+        "bucketCount": bucket_count,
+        "sampledSeconds": len(second_metrics),
+        "buckets": merged_buckets,
+    }
 
 
 def dashboard_summary(date: Optional[str] = None) -> dict[str, Any]:
@@ -1796,6 +1924,8 @@ def dashboard_occlusion(date: Optional[str] = None, time_range: str = "whole-day
         )
 
         hourly_rollups: dict[str, dict[str, Any]] = {}
+        all_scores: list[float] = []
+        all_los_ranks: list[int] = []
         total_visible = 0
         total_light = 0
         total_moderate = 0
@@ -1864,8 +1994,10 @@ def dashboard_occlusion(date: Optional[str] = None, time_range: str = "whole-day
             los_rank = _ptsi_los_rank(breakdown["los"])
             if los_rank is not None:
                 hour_rollup["losRanks"].append(los_rank)
+                all_los_ranks.append(int(los_rank))
             hour_rollup["trackKeys"].update(track_occlusions.keys())
 
+            all_scores.append(second_score)
             total_visible += visible_count
             total_light += light_count
             total_moderate += moderate_count
@@ -1916,13 +2048,13 @@ def dashboard_occlusion(date: Optional[str] = None, time_range: str = "whole-day
         ranked_hours = sorted(hourly_scores, key=lambda score: (float(score["score"]), str(score["hour"])))
         peak_hour = ranked_hours[-1] if ranked_hours else None
         off_peak_hour = ranked_hours[0] if len(ranked_hours) > 1 else None
-        overall_score = float(peak_hour["score"]) if peak_hour else None
-        selected_mode = peak_hour["mode"] if peak_hour else mode
-        selected_average_pedestrians = peak_hour["averagePedestrians"] if peak_hour else None
-        selected_unique_pedestrians = peak_hour["uniquePedestrians"] if peak_hour else None
-        selected_occlusion_mix = peak_hour["occlusionMix"] if peak_hour else None
-        selected_los = peak_hour["los"] if peak_hour else None
-        selected_los_description = peak_hour["losDescription"] if peak_hour else None
+        overall_score = round(_percentile(all_scores, 90), 2) if all_scores else None
+        selected_mode = mode
+        selected_average_pedestrians = round(total_visible / total_sample_seconds, 2) if total_sample_seconds else None
+        selected_unique_pedestrians = len(unique_track_keys) if has_occlusion_data else None
+        selected_occlusion_mix = _ptsi_occlusion_mix(total_light, total_moderate, total_heavy, total_visible) if total_visible else None
+        selected_los = _ptsi_los_from_score(overall_score) if mode == "roi-testing" else _ptsi_los_from_rank(max(all_los_ranks) if all_los_ranks else None)
+        selected_los_description = _ptsi_los_description(selected_los)
         state_label = _ptsi_los_state(selected_los, has_footage, has_occlusion_data)
 
         _ptsi_debug_log(

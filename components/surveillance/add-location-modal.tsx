@@ -12,8 +12,35 @@ import {
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
-import { MapPin, Search, Loader2 } from "lucide-react"
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
+import { Info, Loader2, MapPin, Search } from "lucide-react"
 import { searchLocations, type LocationPayload, type ROIConfiguration } from "@/lib/api"
+
+const ROI_PROMPT_TEMPLATE = `I am going to paste CVAT polygon coordinates for one camera/location. Please convert them into the exact JSON format required by my application.
+
+Rules:
+1. Normalize x by image width.
+2. Normalize y by image height.
+3. Keep 6 decimal places.
+4. Output valid JSON only.
+5. Do not add explanations, markdown, comments, or extra text.
+6. Treat all polygons I provide as walkable include polygons unless I explicitly say otherwise.
+7. The output format must be exactly:
+
+{
+  "referenceSize": [WIDTH, HEIGHT],
+  "includePolygonsNorm": [
+    [[x1, y1], [x2, y2], [x3, y3]],
+    [[x1, y1], [x2, y2], [x3, y3], [x4, y4]]
+  ]
+}
+
+Image size:
+WIDTH = 1920
+HEIGHT = 1080
+
+Here are the raw CVAT coordinates:
+[PASTE CVAT POLYGON COORDINATES HERE]`
 
 const SEARCHABLE_LOCATIONS: Array<{
   aliases: string[]
@@ -275,8 +302,8 @@ export function AddLocationModal({ open, onOpenChange, initialData = null, onSub
         }
       }}
     >
-      <DialogContent className="bg-card border-border sm:max-w-md">
-        <DialogHeader>
+      <DialogContent className="border-border bg-card flex max-h-[90vh] flex-col gap-0 overflow-hidden p-0 sm:max-w-md sm:rounded-2xl">
+        <DialogHeader className="shrink-0 px-6 pt-6">
           <DialogTitle className="flex items-center gap-2 text-foreground">
             <MapPin className="w-5 h-5" />
             {isEditing ? "Edit Location" : "Add New Location"}
@@ -288,7 +315,7 @@ export function AddLocationModal({ open, onOpenChange, initialData = null, onSub
           </DialogDescription>
         </DialogHeader>
         
-        <div className="space-y-4 py-4">
+        <div className="smooth-scrollbar min-h-0 space-y-4 overflow-y-auto overscroll-contain px-6 py-4">
           {/* Place Search */}
           <div className="space-y-2">
             <label className="text-sm font-medium text-foreground">Search Location</label>
@@ -398,7 +425,28 @@ export function AddLocationModal({ open, onOpenChange, initialData = null, onSub
           </div>
 
           <div className="space-y-2">
-            <label className="text-sm font-medium text-foreground">Pedestrian ROI JSON (Optional)</label>
+            <div className="flex items-center gap-2">
+              <label className="text-sm font-medium text-foreground">Pedestrian ROI JSON (Optional)</label>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    aria-label="Show ROI JSON prompt help"
+                    className="rounded-full text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  >
+                    <Info className="h-4 w-4" />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="top" align="start" sideOffset={8} className="max-w-[min(32rem,calc(100vw-2rem))] rounded-xl px-3 py-3 text-left">
+                  <div className="space-y-2">
+                    <p className="text-[11px] font-medium">Copy this prompt for AI ROI conversion:</p>
+                    <pre className="smooth-scrollbar max-h-72 overflow-y-auto whitespace-pre-wrap rounded-lg bg-background/15 p-3 font-mono text-[10px] leading-relaxed text-background/95 select-all">
+                      {ROI_PROMPT_TEMPLATE}
+                    </pre>
+                  </div>
+                </TooltipContent>
+              </Tooltip>
+            </div>
             <Textarea
               placeholder='{"referenceSize":[1920,1080],"includePolygonsNorm":[[[0.24,0.98],[0.99,0.99],[0.22,0.09]]]}'
               value={roiCoordinatesText}
@@ -410,7 +458,7 @@ export function AddLocationModal({ open, onOpenChange, initialData = null, onSub
           </div>
         </div>
 
-        <DialogFooter>
+        <DialogFooter className="shrink-0 px-6 pb-6 pt-2">
           <Button variant="outline" onClick={handleClose} disabled={isSubmitting} className="border-border text-foreground">
             Cancel
           </Button>

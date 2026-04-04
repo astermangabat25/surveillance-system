@@ -29,7 +29,7 @@ export function AISearchBar() {
             type="text"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Ask ALIVE… e.g. blue hat and blue shorts"
+            placeholder="Ask Bantay… e.g. blue hat and blue shorts"
             className="w-full pl-11 pr-11 py-3 bg-secondary border border-border rounded-2xl text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all"
           />
           <button

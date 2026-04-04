@@ -55,6 +55,23 @@ class VideoRecord(BaseModel):
     processedPath: Optional[str] = None
 
 
+class VideoSeverityBucket(BaseModel):
+    startOffsetSeconds: float
+    endOffsetSeconds: float
+    severity: Literal["neutral", "light", "moderate", "heavy"]
+    score: Optional[float] = None
+
+
+class VideoSeveritySummary(BaseModel):
+    bucketCount: int = 0
+    sampledSeconds: int = 0
+    buckets: list[VideoSeverityBucket] = Field(default_factory=list)
+
+
+class VideoDetailRecord(VideoRecord):
+    severitySummary: Optional[VideoSeveritySummary] = None
+
+
 class EventRecord(BaseModel):
     id: str
     type: Literal["detection", "alert", "motion"]

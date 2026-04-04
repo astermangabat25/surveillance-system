@@ -364,8 +364,8 @@ export default function DashboardPage() {
         <div className="grid grid-cols-1 gap-6 xl:grid-cols-[65%_35%]">
           <div className="space-y-6">
             <PedestrianChart
-              title="Estimated Total Unique Pedestrians (Per location)"
-              description="Estimated cumulative unique pedestrian count for each location over the selected timeline."
+              title="Estimated Unique Tracked Pedestrians (Per location)"
+              description="Estimated cumulative unique tracked pedestrian count for each location over the selected timeline."
               timeRange={timeRange}
               selectedDate={selectedDate}
               data={traffic?.series ?? []}
