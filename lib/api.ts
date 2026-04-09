@@ -57,6 +57,17 @@ export interface VideoRecord {
   severitySummary?: VideoSeveritySummary | null
 }
 
+export interface VideoPedestrianTrackRecord {
+  id: string
+  pedestrianId?: number | null
+  firstOffsetSeconds: number
+  lastOffsetSeconds: number
+}
+
+export interface VideoDetailRecord extends VideoRecord {
+  pedestrianTracks: VideoPedestrianTrackRecord[]
+}
+
 export type VideoSeverityLevel = "neutral" | "light" | "moderate" | "heavy"
 
 export interface VideoSeverityBucket {
@@ -370,7 +381,7 @@ export function deleteLocation(locationId: string) {
 }
 
 export function getVideo(videoId: string) {
-  return request<VideoRecord>(`/api/videos/${videoId}`)
+  return request<VideoDetailRecord>(`/api/videos/${videoId}`)
 }
 
 export function getVideoUploadStatus(uploadId: string) {

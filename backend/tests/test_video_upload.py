@@ -168,6 +168,11 @@ def test_video_detail_includes_compact_timeline_severity_summary(monkeypatch, tm
         (8.0, 12.0, "heavy"),
     ]
     assert [bucket["score"] for bucket in buckets] == pytest.approx([22.0, 61.0, 83.0], abs=0.01)
+    assert body["pedestrianTracks"] == [
+        {"id": "track-1", "pedestrianId": 1, "firstOffsetSeconds": 0.0, "lastOffsetSeconds": 11.0},
+        {"id": "track-2", "pedestrianId": 2, "firstOffsetSeconds": 4.0, "lastOffsetSeconds": 11.0},
+        {"id": "track-3", "pedestrianId": 3, "firstOffsetSeconds": 8.0, "lastOffsetSeconds": 11.0},
+    ]
 
 
 def test_enrich_track_summaries_with_vision_appends_visual_metadata(monkeypatch, tmp_path: Path) -> None:

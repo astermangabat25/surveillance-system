@@ -550,6 +550,60 @@ def get_video(video_id: str) -> Optional[dict[str, Any]]:
     return next((video for video in load_state()["videos"] if video["id"] == video_id), None)
 
 
+def _track_window_offset(value: Any) -> Optional[float]:
+    try:
+        return max(0.0, float(value))
+    except (TypeError, ValueError):
+        return None
+
+
+def _video_detail_pedestrian_tracks(state: dict[str, Any], video_id: str) -> list[dict[str, Any]]:
+    compact_tracks: list[dict[str, Any]] = []
+
+    for fallback_index, track in enumerate(state.get("pedestrianTracks", [])):
+        if track.get("videoId") != video_id:
+            continue
+
+        first_offset = _track_window_offset(track.get("firstOffsetSeconds"))
+        last_offset = _track_window_offset(track.get("lastOffsetSeconds"))
+
+        if first_offset is None or last_offset is None:
+            sample_offsets = [float(offset_second) for offset_second, _point, _occlusion_class in _normalized_trajectory_samples(track)]
+            if sample_offsets:
+                if first_offset is None:
+                    first_offset = min(sample_offsets)
+                if last_offset is None:
+                    last_offset = max(sample_offsets)
+
+        if first_offset is None and last_offset is None:
+            best_offset = _track_window_offset(track.get("bestOffsetSeconds"))
+            if best_offset is None:
+                continue
+            first_offset = best_offset
+            last_offset = best_offset
+        elif first_offset is None:
+            first_offset = last_offset
+        elif last_offset is None:
+            last_offset = first_offset
+
+        if first_offset is None or last_offset is None:
+            continue
+
+        if last_offset < first_offset:
+            first_offset, last_offset = last_offset, first_offset
+
+        compact_tracks.append(
+            {
+                "id": str(track.get("id") or f"{video_id}-track-{fallback_index}"),
+                "pedestrianId": track.get("pedestrianId"),
+                "firstOffsetSeconds": first_offset,
+                "lastOffsetSeconds": last_offset,
+            }
+        )
+
+    return compact_tracks
+
+
 def get_video_detail(video_id: str) -> Optional[dict[str, Any]]:
     state = load_state()
     video = next((item for item in state["videos"] if item["id"] == video_id), None)
@@ -558,6 +612,7 @@ def get_video_detail(video_id: str) -> Optional[dict[str, Any]]:
 
     detail = deepcopy(video)
     detail["severitySummary"] = _video_severity_summary(state, detail)
+    detail["pedestrianTracks"] = _video_detail_pedestrian_tracks(state, video_id)
     return detail
 
 

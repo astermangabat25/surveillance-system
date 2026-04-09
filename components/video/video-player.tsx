@@ -23,6 +23,7 @@ interface VideoPlayerProps {
 function applySeek(video: HTMLVideoElement, seconds: number) {
   const nextTime = Number.isFinite(video.duration) ? Math.min(Math.max(seconds, 0), video.duration) : Math.max(seconds, 0)
   video.currentTime = nextTime
+  return nextTime
 }
 
 export function VideoPlayer({
@@ -57,7 +58,7 @@ export function VideoPlayer({
     }
 
     const video = resolvedRef.current
-    const seekToRequestedTime = () => applySeek(video, requestedSeek.seconds)
+    const seekToRequestedTime = () => onTimeUpdate?.(applySeek(video, requestedSeek.seconds))
 
     if (video.readyState >= 1) {
       seekToRequestedTime()
@@ -67,6 +68,63 @@ export function VideoPlayer({
     video.addEventListener("loadedmetadata", seekToRequestedTime, { once: true })
     return () => video.removeEventListener("loadedmetadata", seekToRequestedTime)
   }, [requestedSeek, resolvedRef, src])
+
+  useEffect(() => {
+    const video = resolvedRef.current
+    if (!video || !src) {
+      return
+    }
+
+    let frameId: number | null = null
+
+    const publishCurrentTime = () => onTimeUpdate?.(video.currentTime)
+    const publishDuration = () => onDurationChange?.(Number.isFinite(video.duration) ? video.duration : 0)
+    const stopFrameLoop = () => {
+      if (frameId !== null) {
+        cancelAnimationFrame(frameId)
+        frameId = null
+      }
+    }
+    const frameLoop = () => {
+      publishCurrentTime()
+      if (!video.paused && !video.ended) {
+        frameId = requestAnimationFrame(frameLoop)
+      } else {
+        frameId = null
+      }
+    }
+    const startFrameLoop = () => {
+      stopFrameLoop()
+      frameLoop()
+    }
+    const handleLoadedMetadata = () => {
+      publishDuration()
+      publishCurrentTime()
+    }
+
+    video.addEventListener("loadedmetadata", handleLoadedMetadata)
+    video.addEventListener("play", startFrameLoop)
+    video.addEventListener("pause", publishCurrentTime)
+    video.addEventListener("ended", publishCurrentTime)
+    video.addEventListener("seeking", publishCurrentTime)
+    video.addEventListener("seeked", publishCurrentTime)
+
+    publishDuration()
+    publishCurrentTime()
+    if (!video.paused && !video.ended) {
+      startFrameLoop()
+    }
+
+    return () => {
+      stopFrameLoop()
+      video.removeEventListener("loadedmetadata", handleLoadedMetadata)
+      video.removeEventListener("play", startFrameLoop)
+      video.removeEventListener("pause", publishCurrentTime)
+      video.removeEventListener("ended", publishCurrentTime)
+      video.removeEventListener("seeking", publishCurrentTime)
+      video.removeEventListener("seeked", publishCurrentTime)
+    }
+  }, [onDurationChange, onTimeUpdate, resolvedRef, src])
 
   return (
     <div className="overflow-hidden rounded-xl border border-border bg-card shadow-elevated-sm">
@@ -93,8 +151,6 @@ export function VideoPlayer({
               playsInline
               preload="metadata"
               className="aspect-video w-full bg-black"
-              onLoadedMetadata={(event) => onDurationChange?.(Number.isFinite(event.currentTarget.duration) ? event.currentTarget.duration : 0)}
-              onTimeUpdate={(event) => onTimeUpdate?.(event.currentTarget.currentTime)}
             />
             {showROI && roiPolygons.length > 0 && (
               <svg

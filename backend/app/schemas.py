@@ -68,8 +68,16 @@ class VideoSeveritySummary(BaseModel):
     buckets: list[VideoSeverityBucket] = Field(default_factory=list)
 
 
+class VideoPedestrianTrack(BaseModel):
+    id: str
+    pedestrianId: Optional[int] = None
+    firstOffsetSeconds: float
+    lastOffsetSeconds: float
+
+
 class VideoDetailRecord(VideoRecord):
     severitySummary: Optional[VideoSeveritySummary] = None
+    pedestrianTracks: list[VideoPedestrianTrack] = Field(default_factory=list)
 
 
 class EventRecord(BaseModel):

@@ -10,8 +10,8 @@ import { EventFeed } from "@/components/surveillance/event-feed"
 import { AISearchBar } from "@/components/surveillance/ai-search-bar"
 import { Button } from "@/components/ui/button"
 import { Switch } from "@/components/ui/switch"
-import { AlertCircle, ArrowLeft, Download, Loader2, Share2, Trash2 } from "lucide-react"
-import { deleteVideo, getEvents, getLocations, getMediaUrl, getVideo, getVideoPlaybackPath, type EventRecord, type LocationRecord, type VideoRecord } from "@/lib/api"
+import { Activity, AlertCircle, ArrowLeft, Clock3, Download, Footprints, Loader2, Share2, Trash2, Users } from "lucide-react"
+import { deleteVideo, getEvents, getLocations, getMediaUrl, getVideo, getVideoPlaybackPath, type EventRecord, type LocationRecord, type VideoDetailRecord, type VideoPedestrianTrackRecord } from "@/lib/api"
 
 function getDetectionStatus(event: EventRecord) {
   if (event.type === "alert") return "Requires Review"
@@ -19,11 +19,30 @@ function getDetectionStatus(event: EventRecord) {
   return "Tracked"
 }
 
+function createPlaybackWindow(start: number, end: number) {
+  const safeStart = Math.max(0, start)
+  const safeEnd = Math.max(safeStart, end)
+  return {
+    start: safeStart,
+    end: safeEnd > safeStart ? safeEnd : safeStart + 0.5,
+  }
+}
+
+function trackPlaybackWindows(tracks: VideoPedestrianTrackRecord[]) {
+  return tracks
+    .filter(
+      (track) =>
+        Number.isFinite(track.firstOffsetSeconds)
+        && Number.isFinite(track.lastOffsetSeconds),
+    )
+    .map((track) => createPlaybackWindow(track.firstOffsetSeconds, track.lastOffsetSeconds))
+}
+
 function VideoDetailContent({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params)
   const router = useRouter()
   const searchParams = useSearchParams()
-  const [video, setVideo] = useState<VideoRecord | null>(null)
+  const [video, setVideo] = useState<VideoDetailRecord | null>(null)
   const [videoLocation, setVideoLocation] = useState<LocationRecord | null>(null)
   const [events, setEvents] = useState<EventRecord[]>([])
   const [loading, setLoading] = useState(true)
@@ -143,28 +162,89 @@ function VideoDetailContent({ params }: { params: Promise<{ id: string }> }) {
       .map((event) => ({ id: event.pedestrianId, status: getDetectionStatus(event) }))
   }, [orderedEvents])
 
-  const trackedPedestriansSoFar = useMemo(() => {
-    const seen = new Set<number>()
-
-    for (const event of orderedEvents) {
-      if (typeof event.pedestrianId !== "number" || typeof event.offsetSeconds !== "number") {
-        continue
-      }
-      if (event.offsetSeconds <= currentTimeSeconds) {
-        seen.add(event.pedestrianId)
-      }
+  const pedestrianPlaybackWindows = useMemo(() => {
+    const trackWindows = trackPlaybackWindows(video?.pedestrianTracks ?? [])
+    if (trackWindows.length > 0) {
+      return trackWindows
     }
 
-    return seen.size
-  }, [currentTimeSeconds, orderedEvents])
+    const windows = new Map<number, { start: number; end: number }>()
+
+    for (const event of orderedEvents) {
+      if (event.type !== "detection" || typeof event.pedestrianId !== "number" || typeof event.offsetSeconds !== "number") {
+        continue
+      }
+
+      const offset = Math.max(0, event.offsetSeconds)
+      const existingWindow = windows.get(event.pedestrianId)
+
+      if (!existingWindow) {
+        windows.set(event.pedestrianId, { start: offset, end: offset })
+        continue
+      }
+
+      existingWindow.start = Math.min(existingWindow.start, offset)
+      existingWindow.end = Math.max(existingWindow.end, offset)
+    }
+
+    return Array.from(windows.values()).map((window) => createPlaybackWindow(window.start, window.end))
+  }, [orderedEvents, video?.pedestrianTracks])
+
+  const trackedPedestriansSoFar = useMemo(() => {
+    return pedestrianPlaybackWindows.reduce((count, window) => (window.start <= currentTimeSeconds ? count + 1 : count), 0)
+  }, [currentTimeSeconds, pedestrianPlaybackWindows])
+
+  const liveDetectedCount = useMemo(
+    () =>
+      pedestrianPlaybackWindows.reduce(
+        (count, window) => (currentTimeSeconds >= window.start && currentTimeSeconds <= window.end ? count + 1 : count),
+        0,
+      ),
+    [currentTimeSeconds, pedestrianPlaybackWindows],
+  )
 
   const visibleDetectionDetails = showAllDetections ? detectionDetails : detectionDetails.slice(0, 15)
   const hasCollapsedDetections = detectionDetails.length > 15
   const hasLocationROI = Boolean(videoLocation?.roiCoordinates?.includePolygonsNorm?.length)
 
   const mediaUrl = video ? getMediaUrl(getVideoPlaybackPath(video)) : null
+  const metricTiles = [
+    {
+      icon: Users,
+      value: String(trackedPedestriansSoFar),
+      caption: "Total so far",
+      iconClassName: "bg-emerald-500 text-white ring-emerald-500/20",
+      valueClassName: "text-emerald-100 sm:text-foreground",
+      cardClassName: "border-emerald-400/30 bg-gradient-to-br from-emerald-500/18 via-green-500/10 to-transparent",
+    },
+    {
+      icon: Footprints,
+      value: String(liveDetectedCount),
+      caption: "Detected now",
+      iconClassName: "bg-cyan-500 text-white ring-cyan-500/20",
+      valueClassName: "text-cyan-100 sm:text-foreground",
+      cardClassName: "border-cyan-400/30 bg-gradient-to-br from-cyan-500/20 via-sky-500/10 to-transparent",
+    },
+    {
+      icon: Activity,
+      value: "--",
+      caption: "Metric 3",
+      iconClassName: "bg-violet-500/90 text-white ring-violet-500/20",
+      valueClassName: "text-foreground",
+      cardClassName: "border-violet-400/25 bg-gradient-to-br from-violet-500/12 via-fuchsia-500/8 to-transparent",
+    },
+    {
+      icon: Clock3,
+      value: "--",
+      caption: "Metric 4",
+      iconClassName: "bg-amber-500/90 text-white ring-amber-500/20",
+      valueClassName: "text-foreground",
+      cardClassName: "border-amber-400/25 bg-gradient-to-br from-amber-500/12 via-orange-500/8 to-transparent",
+    },
+  ]
 
   const requestSeek = (seconds: number) => {
+    setCurrentTimeSeconds(Math.max(0, seconds))
     seekTokenRef.current += 1
     setRequestedSeek({ seconds, token: seekTokenRef.current })
   }
@@ -333,6 +413,26 @@ function VideoDetailContent({ params }: { params: Promise<{ id: string }> }) {
               onTimeUpdate={setCurrentTimeSeconds}
               onDurationChange={setDurationSeconds}
             />
+
+            <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+              {metricTiles.map((tile) => {
+                const Icon = tile.icon
+                return (
+                  <div
+                    key={tile.caption}
+                    className={`flex items-center gap-3 rounded-2xl border px-4 py-3 shadow-elevated-sm ${tile.cardClassName}`}
+                  >
+                    <div className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl ring-4 ${tile.iconClassName}`}>
+                      <Icon className="h-5 w-5" />
+                    </div>
+                    <div className="min-w-0">
+                      <p className={`text-2xl font-semibold leading-none ${tile.valueClassName}`}>{tile.value}</p>
+                      <p className="mt-1 text-xs text-muted-foreground">{tile.caption}</p>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
             
             {/* Playback Timeline */}
             <PlaybackTimeline

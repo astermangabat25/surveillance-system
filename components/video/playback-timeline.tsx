@@ -364,34 +364,29 @@ export function PlaybackTimeline({
 
             {clusteredMarkers.map((marker) => {
               const markerStyle = marker.maxSeverity === "heavy"
-                ? "border-red-200/90 bg-red-500/90 text-white"
+                ? "bg-red-500/90"
                 : marker.maxSeverity === "moderate"
-                  ? "border-orange-200/90 bg-orange-400/90 text-slate-950"
+                  ? "bg-orange-400/90"
                   : marker.maxSeverity === "light"
-                    ? "border-yellow-100/90 bg-yellow-300/95 text-slate-950"
-                    : "border-violet-200/80 bg-violet-500/90 text-white"
+                    ? "bg-yellow-300/95"
+                    : "bg-violet-500/90"
 
               return (
                 <button
-                  key={`marker-${marker.start}-${marker.count}`}
+                  key={`marker-${marker.start}-${marker.end}-${marker.lane}`}
                   type="button"
                   title={marker.title}
                   aria-label={marker.title}
-                  className={`absolute z-20 flex -translate-x-1/2 items-center justify-center rounded-full border text-[9px] font-semibold shadow-sm transition-transform hover:scale-105 ${markerStyle}`}
+                  className={`absolute z-20 h-4 w-1.5 -translate-x-1/2 rounded-[2px] shadow-sm transition-transform hover:scale-y-110 ${markerStyle}`}
                   style={{
                     left: `${marker.left}%`,
                     top: `${8 + marker.lane * 12}px`,
-                    minWidth: marker.count > 1 ? "1.15rem" : "0.55rem",
-                    height: marker.count > 1 ? "0.95rem" : "0.7rem",
-                    paddingInline: marker.count > 1 ? "0.2rem" : 0,
                   }}
                   onClick={(event) => {
                     event.stopPropagation()
                     onSeek?.(marker.center)
                   }}
-                >
-                  {marker.count > 1 ? marker.count : null}
-                </button>
+                />
               )
             })}
 
@@ -428,8 +423,8 @@ export function PlaybackTimeline({
                 High
               </span>
               <span className="inline-flex items-center gap-2">
-                <span className="h-2.5 min-w-2.5 rounded-full bg-violet-500" />
-                Event clusters
+                <span className="h-3 w-1.5 rounded-[2px] bg-violet-500" />
+                Event markers
               </span>
               {hasSearchMatches ? (
                 <span className="inline-flex items-center gap-2">
