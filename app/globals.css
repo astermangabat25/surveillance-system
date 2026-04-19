@@ -38,6 +38,9 @@
   --sidebar-accent-foreground: #F5F5F7;
   --sidebar-border: #3A3A3C;
   --sidebar-ring: #A855F7;
+  --scrollbar-track: rgba(58, 58, 60, 0.28);
+  --scrollbar-thumb: rgba(152, 152, 157, 0.52);
+  --scrollbar-thumb-hover: rgba(152, 152, 157, 0.72);
 }
 
 .dark {
@@ -73,6 +76,9 @@
   --sidebar-accent-foreground: #F5F5F7;
   --sidebar-border: #3A3A3C;
   --sidebar-ring: #A855F7;
+  --scrollbar-track: rgba(58, 58, 60, 0.28);
+  --scrollbar-thumb: rgba(152, 152, 157, 0.52);
+  --scrollbar-thumb-hover: rgba(152, 152, 157, 0.72);
 }
 
 @theme inline {
@@ -141,10 +147,41 @@
   box-shadow: 0 2px 12px -2px rgba(0, 0, 0, 0.3), 0 1px 4px -1px rgba(0, 0, 0, 0.2);
 }
 
+html,
+body,
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
+}
+
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+*::-webkit-scrollbar-track {
+  background: var(--scrollbar-track);
+}
+
+*::-webkit-scrollbar-thumb {
+  background-color: var(--scrollbar-thumb);
+  border-radius: 9999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background-color: var(--scrollbar-thumb-hover);
+}
+
+*::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
 .smooth-scrollbar {
   scroll-behavior: smooth;
   scrollbar-width: thin;
-  scrollbar-color: rgba(168, 85, 247, 0.65) rgba(58, 58, 60, 0.25);
+  scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
   -webkit-overflow-scrolling: touch;
 }
 
@@ -153,16 +190,16 @@
 }
 
 .smooth-scrollbar::-webkit-scrollbar-track {
-  background: rgba(58, 58, 60, 0.2);
+  background: var(--scrollbar-track);
   border-radius: 9999px;
 }
 
 .smooth-scrollbar::-webkit-scrollbar-thumb {
-  background: linear-gradient(180deg, rgba(168, 85, 247, 0.85), rgba(99, 102, 241, 0.75));
+  background: var(--scrollbar-thumb);
   border-radius: 9999px;
   border: 1px solid rgba(255, 255, 255, 0.08);
 }
 
 .smooth-scrollbar::-webkit-scrollbar-thumb:hover {
-  background: linear-gradient(180deg, rgba(192, 132, 252, 0.95), rgba(129, 140, 248, 0.85));
+  background: var(--scrollbar-thumb-hover);
 }

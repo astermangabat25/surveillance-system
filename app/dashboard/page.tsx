@@ -328,7 +328,7 @@ export default function DashboardPage() {
             <p className="text-sm text-muted-foreground">Real-time pedestrian tracking metrics</p>
           </div>
 
-          <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_auto] xl:items-end xl:gap-4">
+          <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_auto] xl:items-center xl:gap-4">
             <div className="grid w-full grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-[minmax(0,15rem)_12rem_11rem_14rem] xl:gap-2">
               <div className="w-full min-w-0">
                 <FootageDatePicker
@@ -336,11 +336,12 @@ export default function DashboardPage() {
                   onChange={handleDateChange}
                   highlightedDates={footageDates}
                   placeholder="Select date"
+                  className="!h-11 min-h-11"
                 />
               </div>
 
               <Select value={timeRange} onValueChange={handleTimeRangeChange}>
-                <SelectTrigger className="w-full rounded-2xl border-border bg-secondary text-foreground">
+                <SelectTrigger className="!h-11 min-h-11 w-full rounded-2xl border-border bg-secondary py-0 text-foreground">
                   <Clock className="mr-2 h-4 w-4 text-muted-foreground" />
                   <SelectValue placeholder="Select time range" />
                 </SelectTrigger>
@@ -354,7 +355,7 @@ export default function DashboardPage() {
               </Select>
 
               <Select value={startTime} onValueChange={handleStartTimeChange}>
-                <SelectTrigger className="w-full rounded-2xl border-border bg-secondary text-foreground">
+                <SelectTrigger className="!h-11 min-h-11 w-full rounded-2xl border-border bg-secondary py-0 text-foreground">
                   <SelectValue placeholder="Start time" />
                 </SelectTrigger>
                 <SelectContent className="max-h-80 rounded-xl border-border bg-popover">
@@ -367,7 +368,7 @@ export default function DashboardPage() {
               </Select>
 
               <Select value={selectedLocationId} onValueChange={handleLocationChange}>
-                <SelectTrigger className="w-full rounded-2xl border-border bg-secondary text-foreground">
+                <SelectTrigger className="!h-11 min-h-11 w-full rounded-2xl border-border bg-secondary py-0 text-foreground">
                   <SelectValue placeholder="Select location" />
                 </SelectTrigger>
                 <SelectContent className="rounded-xl border-border bg-popover">
@@ -383,7 +384,7 @@ export default function DashboardPage() {
             <div className="flex w-full flex-col gap-3 sm:flex-row sm:flex-wrap sm:justify-end xl:w-auto xl:flex-nowrap xl:justify-end">
               <Dialog open={modelDialogOpen} onOpenChange={setModelDialogOpen}>
                 <DialogTrigger asChild>
-                  <Button variant="outline" className="w-full rounded-2xl border-border px-4 text-foreground hover:bg-secondary sm:w-auto sm:min-w-[9.25rem]">
+                  <Button variant="outline" className="!h-11 min-h-11 w-full rounded-2xl border-border px-4 py-0 text-foreground hover:bg-secondary sm:w-auto sm:min-w-[9.25rem]">
                     <Settings2 className="mr-2 h-4 w-4" />
                     Edit Model
                   </Button>
@@ -530,7 +531,7 @@ export default function DashboardPage() {
 
               <Button
                 variant="outline"
-                className="w-full rounded-2xl border-border px-4 text-foreground hover:bg-secondary sm:w-auto sm:min-w-[9.25rem]"
+                className="!h-11 min-h-11 w-full rounded-2xl border-border px-4 py-0 text-foreground hover:bg-secondary sm:w-auto sm:min-w-[9.25rem]"
                 onClick={() => {
                   void loadDashboard()
                   void loadModelInfo()
@@ -542,7 +543,7 @@ export default function DashboardPage() {
               </Button>
 
               <Button
-                className="w-full rounded-2xl bg-accent px-4 text-accent-foreground shadow-elevated-sm hover:bg-accent/90 sm:w-auto sm:min-w-[10.5rem]"
+                className="!h-11 min-h-11 w-full rounded-2xl bg-accent px-4 py-0 text-accent-foreground shadow-elevated-sm hover:bg-accent/90 sm:w-auto sm:min-w-[10.5rem]"
                 onClick={() => {
                   void handleExportReport()
                 }}

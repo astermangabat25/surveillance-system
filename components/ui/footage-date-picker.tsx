@@ -77,13 +77,18 @@ export function FootageDatePicker({
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
-      <div className={cn("flex items-center gap-2 rounded-2xl border border-border bg-secondary px-4 py-2.5", className)}>
+      <div
+        className={cn(
+          "box-border flex h-11 min-h-11 items-center gap-2 rounded-2xl border border-border bg-secondary px-4 shadow-xs transition-colors dark:bg-input/30 dark:hover:bg-input/50",
+          className,
+        )}
+      >
         <CalendarIcon className="h-4 w-4 text-muted-foreground" />
         <PopoverTrigger asChild>
           <Button
             type="button"
             variant="ghost"
-            className="h-auto w-[152px] justify-start bg-transparent p-0 text-left text-sm font-normal hover:bg-transparent"
+            className="h-full w-[152px] justify-start bg-transparent p-0 text-left text-sm font-normal hover:bg-transparent focus-visible:ring-0 dark:hover:bg-transparent"
           >
             <span className={value ? "text-foreground" : "text-muted-foreground"}>{formatDateLabel(value, placeholder)}</span>
           </Button>
