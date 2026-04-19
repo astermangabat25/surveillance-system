@@ -605,7 +605,7 @@ export default function DashboardPage() {
               onChartTypeChange={setInOutChartType}
             />
           </div>
-          <OcclusionMap hourFilter={hourFilter} onHourFilterChange={setHourFilter} data={occlusion} loading={dashboardLoading} />
+          <OcclusionMap hourFilter={hourFilter} onHourFilterChange={setHourFilter} data={occlusion} loading={dashboardLoading} selectedDate={selectedDate} />
         </div>
 
         <AISynthesis selectedDate={selectedDate} timeRange={timeRange} data={synthesis} loading={dashboardLoading} />
