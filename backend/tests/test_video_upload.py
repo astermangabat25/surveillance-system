@@ -5,7 +5,7 @@ import io
 import json
 import logging
 import os
-import sys
+import subprocess
 import threading
 import zipfile
 from pathlib import Path
@@ -60,41 +60,490 @@ def test_semantic_confidence_scales_with_match_strength() -> None:
     assert store._semantic_confidence(0.52) == 96
 
 
-def test_ultralytics_status_prefers_vendored_package(monkeypatch, tmp_path: Path) -> None:
+def test_ultralytics_status_reports_rtdetr_cli_readiness(monkeypatch, tmp_path: Path) -> None:
     configure_temp_storage(monkeypatch, tmp_path)
 
-    global_root = tmp_path / "global-site"
-    global_pkg = global_root / "ultralytics"
-    global_pkg.mkdir(parents=True, exist_ok=True)
-    (global_pkg / "__init__.py").write_text('__version__ = "0.0.global"\n', encoding="utf-8")
-    monkeypatch.syspath_prepend(str(global_root))
-
-    vendored_pkg = store.BACKEND_DIR / "vendor" / "ultralytics" / "ultralytics"
-    vendored_pkg.mkdir(parents=True, exist_ok=True)
-    (vendored_pkg / "__init__.py").write_text('__version__ = "9.9.vendored"\n', encoding="utf-8")
+    occlusion_root = tmp_path / "Occlusion-Robust-RTDETR"
+    (occlusion_root / "tools").mkdir(parents=True, exist_ok=True)
+    (occlusion_root / "configs" / "rtdetr").mkdir(parents=True, exist_ok=True)
+    (occlusion_root / "configs" / "dataset" / "MergedAll" / "annotations").mkdir(parents=True, exist_ok=True)
+    (occlusion_root / "tools" / "infer.py").write_text("print('ok')\n", encoding="utf-8")
+    (occlusion_root / "configs" / "rtdetr" / "rtdetr_r50_final.yml").write_text("model: rtdetr\n", encoding="utf-8")
+    (occlusion_root / "configs" / "dataset" / "MergedAll" / "annotations" / "instances_train.json").write_text("{}\n", encoding="utf-8")
+    (occlusion_root / "counting_config_g2.9.json").write_text("{}\n", encoding="utf-8")
 
     model_path = store.MODELS_DIR / "best.pt"
     model_path.write_bytes(b"fake-model")
     store.set_model(model_path.name)
 
-    original_sys_path = sys.path.copy()
-    for module_name in [name for name in list(sys.modules) if name == "ultralytics" or name.startswith("ultralytics.")]:
-        monkeypatch.delitem(sys.modules, module_name, raising=False)
-
-    try:
-        status = inference.ultralytics_status()
-    finally:
-        sys.path[:] = original_sys_path
-        for module_name in [name for name in list(sys.modules) if name == "ultralytics" or name.startswith("ultralytics.")]:
-            sys.modules.pop(module_name, None)
+    status = inference.ultralytics_status()
 
     assert status["installed"] is True
-    assert status["version"] == "9.9.vendored"
-    assert status["vendoredPath"] == "vendor/ultralytics"
+    assert status["version"] is not None
+    assert status["packagePath"].endswith("Occlusion-Robust-RTDETR/tools/infer.py")
+    assert status["vendoredPath"].endswith("Occlusion-Robust-RTDETR")
     assert status["usingVendoredCopy"] is True
-    assert status["packagePath"].endswith("vendor/ultralytics/ultralytics/__init__.py")
     assert status["modelExists"] is True
     assert status["ready"] is True
+
+
+def test_infer_counting_config_path_maps_gate_locations(monkeypatch, tmp_path: Path) -> None:
+    configure_temp_storage(monkeypatch, tmp_path)
+
+    occlusion_root = tmp_path / "Occlusion-Robust-RTDETR"
+    occlusion_root.mkdir(parents=True, exist_ok=True)
+    (occlusion_root / "counting_config_g2.json").write_text("{}\n", encoding="utf-8")
+    (occlusion_root / "counting_config_g2.9.json").write_text("{}\n", encoding="utf-8")
+    (occlusion_root / "counting_config_g3.json").write_text("{}\n", encoding="utf-8")
+    (occlusion_root / "counting_config_g3.2.json").write_text("{}\n", encoding="utf-8")
+    (occlusion_root / "counting_config_g3.5.json").write_text("{}\n", encoding="utf-8")
+    monkeypatch.setattr(inference, "_occlusion_repo_dir", lambda: occlusion_root)
+
+    assert inference._infer_counting_config_path("Gate 2").name == "counting_config_g2.json"
+    assert inference._infer_counting_config_path("gate2.9").name == "counting_config_g2.9.json"
+    assert inference._infer_counting_config_path("Gate 3").name == "counting_config_g3.json"
+    assert inference._infer_counting_config_path("GATE 3.2").name == "counting_config_g3.2.json"
+    assert inference._infer_counting_config_path("g3.5").name == "counting_config_g3.5.json"
+
+
+def test_infer_counting_config_path_falls_back_to_gate_2_9(monkeypatch, tmp_path: Path) -> None:
+    configure_temp_storage(monkeypatch, tmp_path)
+
+    occlusion_root = tmp_path / "Occlusion-Robust-RTDETR"
+    occlusion_root.mkdir(parents=True, exist_ok=True)
+    fallback_path = occlusion_root / "counting_config_g2.9.json"
+    fallback_path.write_text("{}\n", encoding="utf-8")
+    monkeypatch.setattr(inference, "_occlusion_repo_dir", lambda: occlusion_root)
+
+    assert inference._infer_counting_config_path("Unknown Location").name == "counting_config_g2.9.json"
+    assert inference._infer_counting_config_path("Sector 35").name == "counting_config_g2.9.json"
+    assert inference._infer_counting_config_path("Gate 2").name == "counting_config_g2.9.json"
+
+
+def test_run_video_inference_selects_location_specific_counting_config(monkeypatch, tmp_path: Path) -> None:
+    configure_temp_storage(monkeypatch, tmp_path)
+
+    source_video = store.RAW_VIDEOS_DIR / "clip.mp4"
+    source_video.write_bytes(b"fake-video")
+    model_path = store.MODELS_DIR / "best.pt"
+    model_path.write_bytes(b"fake-model")
+
+    occlusion_root = tmp_path / "Occlusion-Robust-RTDETR"
+    occlusion_root.mkdir(parents=True, exist_ok=True)
+    (occlusion_root / "counting_config_g2.json").write_text("{}\n", encoding="utf-8")
+    (occlusion_root / "counting_config_g2.9.json").write_text("{}\n", encoding="utf-8")
+
+    monkeypatch.setattr(
+        inference,
+        "ultralytics_status",
+        lambda: {"installed": True, "modelExists": True, "ready": True, "currentModel": model_path.name},
+    )
+    monkeypatch.setattr(inference, "resolve_model_path", lambda model_name: model_path)
+    monkeypatch.setattr(inference, "_occlusion_repo_dir", lambda: occlusion_root)
+
+    captured: dict[str, Path] = {}
+
+    def fake_build_rtdetr_command(**kwargs):
+        captured["counting_config_path"] = kwargs["counting_config_path"]
+        return ["python", "fake-infer.py"]
+
+    monkeypatch.setattr(inference, "_build_rtdetr_command", fake_build_rtdetr_command)
+
+    class SuccessfulProcess:
+        returncode = 0
+        pid = 45455
+
+        def communicate(self, timeout=None):
+            return "done", ""
+
+        def poll(self):
+            return self.returncode
+
+    monkeypatch.setattr(inference.subprocess, "Popen", lambda *args, **kwargs: SuccessfulProcess())
+
+    video_record = {"id": "video-success", "location": "gate2", "startTime": "10:00:00"}
+    output_file = store.PROCESSED_VIDEOS_DIR / video_record["id"] / f"{source_video.stem}-processed.mp4"
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+    output_file.write_bytes(b"processed-video")
+
+    inference.run_video_inference(source_video, video_record=video_record)
+
+    assert captured["counting_config_path"].name == "counting_config_g2.json"
+
+
+def test_run_video_inference_raises_runtime_error_with_stderr_on_non_zero_exit(monkeypatch, tmp_path: Path) -> None:
+    configure_temp_storage(monkeypatch, tmp_path)
+
+    source_video = store.RAW_VIDEOS_DIR / "clip.mp4"
+    source_video.write_bytes(b"fake-video")
+    model_path = store.MODELS_DIR / "best.pt"
+    model_path.write_bytes(b"fake-model")
+
+    monkeypatch.setattr(
+        inference,
+        "ultralytics_status",
+        lambda: {"installed": True, "modelExists": True, "ready": True, "currentModel": model_path.name},
+    )
+    monkeypatch.setattr(inference, "resolve_model_path", lambda model_name: model_path)
+    monkeypatch.setattr(inference, "_build_rtdetr_command", lambda **kwargs: ["python", "fake-infer.py"])
+    monkeypatch.setattr(inference, "_occlusion_repo_dir", lambda: tmp_path)
+
+    class FailingProcess:
+        returncode = 2
+        pid = 4242
+
+        def communicate(self, timeout=None):
+            return "", "fatal: invalid checkpoint"
+
+        def poll(self):
+            return self.returncode
+
+    monkeypatch.setattr(inference.subprocess, "Popen", lambda *args, **kwargs: FailingProcess())
+
+    with pytest.raises(RuntimeError, match="RT-DETR inference command failed: fatal: invalid checkpoint"):
+        inference.run_video_inference(source_video, video_record={"id": "video-fail"})
+
+
+def test_run_video_inference_raises_when_success_has_no_processed_output(monkeypatch, tmp_path: Path) -> None:
+    configure_temp_storage(monkeypatch, tmp_path)
+
+    source_video = store.RAW_VIDEOS_DIR / "clip.mp4"
+    source_video.write_bytes(b"fake-video")
+    model_path = store.MODELS_DIR / "best.pt"
+    model_path.write_bytes(b"fake-model")
+
+    monkeypatch.setattr(
+        inference,
+        "ultralytics_status",
+        lambda: {"installed": True, "modelExists": True, "ready": True, "currentModel": model_path.name},
+    )
+    monkeypatch.setattr(inference, "resolve_model_path", lambda model_name: model_path)
+    monkeypatch.setattr(inference, "_build_rtdetr_command", lambda **kwargs: ["python", "fake-infer.py"])
+    monkeypatch.setattr(inference, "_occlusion_repo_dir", lambda: tmp_path)
+
+    class SuccessfulProcessWithoutOutput:
+        returncode = 0
+        pid = 4343
+
+        def communicate(self, timeout=None):
+            return "ok", ""
+
+        def poll(self):
+            return self.returncode
+
+    monkeypatch.setattr(inference.subprocess, "Popen", lambda *args, **kwargs: SuccessfulProcessWithoutOutput())
+
+    with pytest.raises(RuntimeError, match="no processed output video was found"):
+        inference.run_video_inference(source_video, video_record={"id": "video-missing-output"})
+
+
+def test_run_video_inference_cancellation_terminates_process_group(monkeypatch, tmp_path: Path) -> None:
+    configure_temp_storage(monkeypatch, tmp_path)
+
+    source_video = store.RAW_VIDEOS_DIR / "clip.mp4"
+    source_video.write_bytes(b"fake-video")
+    model_path = store.MODELS_DIR / "best.pt"
+    model_path.write_bytes(b"fake-model")
+
+    monkeypatch.setattr(
+        inference,
+        "ultralytics_status",
+        lambda: {"installed": True, "modelExists": True, "ready": True, "currentModel": model_path.name},
+    )
+    monkeypatch.setattr(inference, "resolve_model_path", lambda model_name: model_path)
+    monkeypatch.setattr(inference, "_build_rtdetr_command", lambda **kwargs: ["python", "fake-infer.py"])
+    monkeypatch.setattr(inference, "_occlusion_repo_dir", lambda: tmp_path)
+
+    class LongRunningProcess:
+        def __init__(self):
+            self.returncode = None
+            self.pid = 4444
+            self.wait_calls = 0
+
+        def communicate(self, timeout=None):
+            raise subprocess.TimeoutExpired(cmd="fake-infer.py", timeout=timeout or 0)
+
+        def poll(self):
+            return self.returncode
+
+        def wait(self, timeout=None):
+            self.wait_calls += 1
+            if self.wait_calls == 1:
+                raise subprocess.TimeoutExpired(cmd="fake-infer.py", timeout=timeout or 0)
+            self.returncode = -9
+            return self.returncode
+
+        def terminate(self):
+            self.returncode = -15
+
+        def kill(self):
+            self.returncode = -9
+
+    process = LongRunningProcess()
+    monkeypatch.setattr(inference.subprocess, "Popen", lambda *args, **kwargs: process)
+
+    killpg_calls: list[tuple[int, int]] = []
+    monkeypatch.setattr(inference.os, "getpgid", lambda pid: 9999)
+    monkeypatch.setattr(inference.os, "killpg", lambda pgid, sig: killpg_calls.append((pgid, sig)))
+
+    checks = {"count": 0}
+
+    def progress_callback(payload: dict[str, object]) -> None:
+        return None
+
+    def cancel_check() -> None:
+        checks["count"] += 1
+        if checks["count"] >= 2:
+            raise InterruptedError("cancelled by user")
+
+    progress_callback.cancel_check = cancel_check  # type: ignore[attr-defined]
+
+    with pytest.raises(InterruptedError, match="cancelled by user"):
+        inference.run_video_inference(source_video, video_record={"id": "video-cancel"}, progress_callback=progress_callback)
+
+    assert killpg_calls[0] == (9999, inference.signal.SIGTERM)
+    assert killpg_calls[-1] == (9999, inference.signal.SIGKILL)
+
+
+def test_run_video_inference_returns_existing_processed_path_on_success(monkeypatch, tmp_path: Path) -> None:
+    configure_temp_storage(monkeypatch, tmp_path)
+
+    source_video = store.RAW_VIDEOS_DIR / "clip.mp4"
+    source_video.write_bytes(b"fake-video")
+    model_path = store.MODELS_DIR / "best.pt"
+    model_path.write_bytes(b"fake-model")
+    video_record = {"id": "video-success"}
+
+    monkeypatch.setattr(
+        inference,
+        "ultralytics_status",
+        lambda: {"installed": True, "modelExists": True, "ready": True, "currentModel": model_path.name},
+    )
+    monkeypatch.setattr(inference, "resolve_model_path", lambda model_name: model_path)
+    monkeypatch.setattr(inference, "_build_rtdetr_command", lambda **kwargs: ["python", "fake-infer.py"])
+    monkeypatch.setattr(inference, "_occlusion_repo_dir", lambda: tmp_path)
+
+    class SuccessfulProcess:
+        returncode = 0
+        pid = 4545
+
+        def communicate(self, timeout=None):
+            return "done", ""
+
+        def poll(self):
+            return self.returncode
+
+    monkeypatch.setattr(inference.subprocess, "Popen", lambda *args, **kwargs: SuccessfulProcess())
+
+    output_file = store.PROCESSED_VIDEOS_DIR / video_record["id"] / f"{source_video.stem}-processed.mp4"
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+    output_file.write_bytes(b"processed-video")
+
+    result = inference.run_video_inference(source_video, video_record=video_record)
+
+    resolved = store.BACKEND_DIR / result["processedPath"]
+    assert resolved.exists()
+    assert resolved == output_file
+
+
+def test_run_video_inference_parses_counts_csv_into_analytics(monkeypatch, tmp_path: Path) -> None:
+    configure_temp_storage(monkeypatch, tmp_path)
+
+    source_video = store.RAW_VIDEOS_DIR / "clip.mp4"
+    source_video.write_bytes(b"fake-video")
+    model_path = store.MODELS_DIR / "best.pt"
+    model_path.write_bytes(b"fake-model")
+    video_record = {"id": "video-success", "location": "Gate 2.9", "startTime": "10:00:00"}
+
+    monkeypatch.setattr(
+        inference,
+        "ultralytics_status",
+        lambda: {"installed": True, "modelExists": True, "ready": True, "currentModel": model_path.name},
+    )
+    monkeypatch.setattr(inference, "resolve_model_path", lambda model_name: model_path)
+    monkeypatch.setattr(inference, "_build_rtdetr_command", lambda **kwargs: ["python", "fake-infer.py"])
+    monkeypatch.setattr(inference, "_occlusion_repo_dir", lambda: tmp_path)
+
+    class SuccessfulProcess:
+        returncode = 0
+        pid = 4546
+
+        def communicate(self, timeout=None):
+            return "done", ""
+
+        def poll(self):
+            return self.returncode
+
+    monkeypatch.setattr(inference.subprocess, "Popen", lambda *args, **kwargs: SuccessfulProcess())
+
+    output_file = store.PROCESSED_VIDEOS_DIR / video_record["id"] / f"{source_video.stem}-processed.mp4"
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+    output_file.write_bytes(b"processed-video")
+    counts_file = output_file.with_suffix("").with_name(f"{output_file.with_suffix('').name}_counts.csv")
+    counts_file.write_text(
+        "\n".join(
+            [
+                "timestamp,frame_number,line_name,track_id,class_id,class_name,direction,total_in,total_out",
+                "10:00:01,12,Gate-A,7,0,person,in,1,0",
+                "10:00:02,18,Gate-A,8,0,person,out,1,1",
+                "10:00:03,25,Gate-B,7,0,person,in,2,1",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    result = inference.run_video_inference(source_video, video_record=video_record)
+
+    assert result["pedestrianCount"] == 2
+    assert len(result["events"]) == 3
+    assert len(result["pedestrianTracks"]) == 2
+    assert result["events"][0]["description"] == "Pedestrian ID #7 crossed Gate-A (in)"
+    assert result["events"][0]["location"] == "Gate 2.9"
+    assert result["events"][0]["videoId"] == "video-success"
+
+    track_by_id = {track["pedestrianId"]: track for track in result["pedestrianTracks"]}
+    assert track_by_id[7]["firstFrame"] == 12
+    assert track_by_id[7]["lastFrame"] == 25
+    assert track_by_id[8]["firstFrame"] == 18
+    assert track_by_id[8]["lastFrame"] == 18
+
+
+def test_run_video_inference_counts_person_only_with_track_id_fallback(monkeypatch, tmp_path: Path) -> None:
+    configure_temp_storage(monkeypatch, tmp_path)
+
+    source_video = store.RAW_VIDEOS_DIR / "clip.mp4"
+    source_video.write_bytes(b"fake-video")
+    model_path = store.MODELS_DIR / "best.pt"
+    model_path.write_bytes(b"fake-model")
+    video_record = {"id": "video-success", "location": "Gate 2.9", "startTime": "10:00:00"}
+
+    monkeypatch.setattr(
+        inference,
+        "ultralytics_status",
+        lambda: {"installed": True, "modelExists": True, "ready": True, "currentModel": model_path.name},
+    )
+    monkeypatch.setattr(inference, "resolve_model_path", lambda model_name: model_path)
+    monkeypatch.setattr(inference, "_build_rtdetr_command", lambda **kwargs: ["python", "fake-infer.py"])
+    monkeypatch.setattr(inference, "_occlusion_repo_dir", lambda: tmp_path)
+
+    class SuccessfulProcess:
+        returncode = 0
+        pid = 4547
+
+        def communicate(self, timeout=None):
+            return "done", ""
+
+        def poll(self):
+            return self.returncode
+
+    monkeypatch.setattr(inference.subprocess, "Popen", lambda *args, **kwargs: SuccessfulProcess())
+
+    output_file = store.PROCESSED_VIDEOS_DIR / video_record["id"] / f"{source_video.stem}-processed.mp4"
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+    output_file.write_bytes(b"processed-video")
+    counts_file = output_file.with_suffix("").with_name(f"{output_file.with_suffix('').name}_counts.csv")
+
+    counts_file.write_text(
+        "\n".join(
+            [
+                "timestamp,frame_number,line_name,track_id,class_id,class_name,direction,total_in,total_out",
+                "10:00:01,12,Gate-A,7,0,bicycle,in,1,0",
+                "10:00:02,18,Gate-A,8,0,PERSON,out,1,1",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    result_with_person = inference.run_video_inference(source_video, video_record=video_record)
+    assert result_with_person["pedestrianCount"] == 1
+
+    counts_file.write_text(
+        "\n".join(
+            [
+                "timestamp,frame_number,line_name,track_id,class_id,class_name,direction,total_in,total_out",
+                "10:00:01,12,Gate-A,7,0,,in,1,0",
+                "10:00:02,18,Gate-A,8,0,,out,1,1",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    result_without_person = inference.run_video_inference(source_video, video_record=video_record)
+    assert result_without_person["pedestrianCount"] == 2
+
+    counts_file.write_text(
+        "\n".join(
+            [
+                "timestamp,frame_number,line_name,track_id,class_id,class_name,direction,total_in,total_out",
+                "10:00:01,12,Gate-A,not-a-number,0,person,in,1,0",
+                "10:00:02,18,Gate-A,,0,PERSON,out,1,1",
+                "10:00:03,25,Gate-B,42,0,bicycle,in,2,1",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    result_with_malformed_person_ids = inference.run_video_inference(source_video, video_record=video_record)
+    assert result_with_malformed_person_ids["pedestrianCount"] == 0
+
+
+def test_run_video_inference_times_out_and_terminates_process_group(monkeypatch, tmp_path: Path) -> None:
+    configure_temp_storage(monkeypatch, tmp_path)
+
+    source_video = store.RAW_VIDEOS_DIR / "clip.mp4"
+    source_video.write_bytes(b"fake-video")
+    model_path = store.MODELS_DIR / "best.pt"
+    model_path.write_bytes(b"fake-model")
+
+    monkeypatch.setattr(
+        inference,
+        "ultralytics_status",
+        lambda: {"installed": True, "modelExists": True, "ready": True, "currentModel": model_path.name},
+    )
+    monkeypatch.setattr(inference, "resolve_model_path", lambda model_name: model_path)
+    monkeypatch.setattr(inference, "_build_rtdetr_command", lambda **kwargs: ["python", "fake-infer.py"])
+    monkeypatch.setattr(inference, "_occlusion_repo_dir", lambda: tmp_path)
+    monkeypatch.setattr(inference, "INFERENCE_MAX_RUNTIME_SECONDS", 1.0)
+
+    monotonic_values = iter([0.0, 0.5, 1.5])
+    monkeypatch.setattr(inference.time, "monotonic", lambda: next(monotonic_values))
+
+    class HungProcess:
+        def __init__(self) -> None:
+            self.returncode = None
+            self.pid = 4550
+            self.wait_calls = 0
+
+        def communicate(self, timeout=None):
+            raise subprocess.TimeoutExpired(cmd="fake-infer.py", timeout=timeout or 0)
+
+        def poll(self):
+            return self.returncode
+
+        def wait(self, timeout=None):
+            self.wait_calls += 1
+            self.returncode = -15
+            return self.returncode
+
+        def terminate(self):
+            self.returncode = -15
+
+        def kill(self):
+            self.returncode = -9
+
+    process = HungProcess()
+    monkeypatch.setattr(inference.subprocess, "Popen", lambda *args, **kwargs: process)
+
+    killpg_calls: list[tuple[int, int]] = []
+    monkeypatch.setattr(inference.os, "getpgid", lambda pid: 9998)
+    monkeypatch.setattr(inference.os, "killpg", lambda pgid, sig: killpg_calls.append((pgid, sig)))
+
+    with pytest.raises(RuntimeError, match=r"RT-DETR inference command timed out after 1\.0 seconds"):
+        inference.run_video_inference(source_video, video_record={"id": "video-timeout"})
+
+    assert killpg_calls[0] == (9998, inference.signal.SIGTERM)
+    assert process.wait_calls >= 1
 
 
 def test_box_xyxy_accepts_multi_value_tensor_like_objects() -> None:
@@ -335,7 +784,7 @@ def test_upload_video_runs_inference_and_persists_results(monkeypatch, tmp_path:
         response = client.post(
             "/api/videos",
             data={
-                "locationId": "edsa-sec-walk",
+                "locationId": "gate-2-9",
                 "date": "2026-03-17",
                 "startTime": "10:00",
                 "endTime": "10:01",
@@ -390,7 +839,7 @@ def test_upload_video_runs_inference_and_persists_results(monkeypatch, tmp_path:
     queue_history = json.loads(store.QUEUE_HISTORY_JSON_FILE.read_text(encoding="utf-8"))
     history_item = next(item for item in queue_history if item["uploadId"] == upload_id)
     assert history_item["state"] == "complete"
-    assert history_item["locationName"] == "EDSA Sec Walk"
+    assert history_item["locationName"] == "Gate 2.9"
 
     with TestClient(main.app) as client:
         history_response = client.get("/api/videos/uploads/history")
@@ -399,12 +848,70 @@ def test_upload_video_runs_inference_and_persists_results(monkeypatch, tmp_path:
     assert any(item["uploadId"] == upload_id and item["state"] == "complete" for item in history_response.json())
 
 
+def test_upload_model_accepts_pt_checkpoint(monkeypatch, tmp_path: Path) -> None:
+    configure_temp_storage(monkeypatch, tmp_path)
+
+    with TestClient(main.app) as client:
+        response = client.post(
+            "/api/models/upload",
+            files={"file": ("detector.pt", b"fake-model-bytes", "application/octet-stream")},
+        )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["currentModel"] == "detector.pt"
+    assert (store.MODELS_DIR / "detector.pt").exists()
+
+
+def test_upload_model_accepts_uppercase_pt_extension(monkeypatch, tmp_path: Path) -> None:
+    configure_temp_storage(monkeypatch, tmp_path)
+
+    with TestClient(main.app) as client:
+        response = client.post(
+            "/api/models/upload",
+            files={"file": ("detector.PT", b"fake-model-bytes", "application/octet-stream")},
+        )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["currentModel"] == "detector.PT"
+    assert (store.MODELS_DIR / "detector.PT").exists()
+
+
+def test_upload_model_accepts_pth_checkpoint(monkeypatch, tmp_path: Path) -> None:
+    configure_temp_storage(monkeypatch, tmp_path)
+
+    with TestClient(main.app) as client:
+        response = client.post(
+            "/api/models/upload",
+            files={"file": ("detector.pth", b"fake-model-bytes", "application/octet-stream")},
+        )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["currentModel"] == "detector.pth"
+    assert (store.MODELS_DIR / "detector.pth").exists()
+
+
+def test_upload_model_rejects_non_checkpoint_extension(monkeypatch, tmp_path: Path) -> None:
+    configure_temp_storage(monkeypatch, tmp_path)
+
+    with TestClient(main.app) as client:
+        response = client.post(
+            "/api/models/upload",
+            files={"file": ("detector.onnx", b"fake-model-bytes", "application/octet-stream")},
+        )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Only .pt or .pth model files are supported"
+
+
 def test_dashboard_export_returns_zip_bundle_with_portable_artifacts(monkeypatch, tmp_path: Path) -> None:
     configure_temp_storage(monkeypatch, tmp_path)
 
     video = store.add_video(
         {
-            "locationId": "edsa-sec-walk",
+            "locationId": "gate-2-9",
             "date": "2026-03-17",
             "startTime": "10:00:00",
             "endTime": "10:00:05",
@@ -512,7 +1019,7 @@ def test_upload_video_forwards_fast_mode(monkeypatch, tmp_path: Path) -> None:
         response = client.post(
             "/api/videos",
             data={
-                "locationId": "edsa-sec-walk",
+                "locationId": "gate-2-9",
                 "date": "2026-03-17",
                 "startTime": "10:00",
                 "endTime": "10:01",
@@ -555,7 +1062,7 @@ def test_upload_video_status_endpoint_reports_processing_progress(monkeypatch, t
             upload_response["response"] = client.post(
                 "/api/videos",
                 data={
-                    "locationId": "edsa-sec-walk",
+                    "locationId": "gate-2-9",
                     "date": "2026-03-17",
                     "startTime": "10:00",
                     "endTime": "10:00:40",
@@ -630,7 +1137,7 @@ def test_upload_video_status_endpoint_reports_ptsi_phase_before_completion(monke
             upload_response["response"] = client.post(
                 "/api/videos",
                 data={
-                    "locationId": "edsa-sec-walk",
+                    "locationId": "gate-2-9",
                     "date": "2026-03-17",
                     "startTime": "10:00",
                     "endTime": "10:01",
@@ -700,7 +1207,7 @@ def test_cancel_upload_endpoint_marks_upload_for_cancellation(monkeypatch, tmp_p
             upload_response["response"] = client.post(
                 "/api/videos",
                 data={
-                    "locationId": "edsa-sec-walk",
+                    "locationId": "gate-2-9",
                     "date": "2026-03-17",
                     "startTime": "10:00",
                     "endTime": "10:00:40",
@@ -749,8 +1256,8 @@ def test_stale_cancellation_requested_upload_recovers_to_cancelled(monkeypatch, 
                     "phase": "tracking",
                     "videoId": "video-stale-cancel",
                     "fileName": "clip.mp4",
-                    "locationId": "edsa-sec-walk",
-                    "locationName": "EDSA Sec Walk",
+                    "locationId": "gate-2-9",
+                    "locationName": "Gate 2.9",
                     "date": "2026-04-10",
                     "startTime": "10:00:00",
                     "endTime": "10:05:00",
@@ -798,8 +1305,8 @@ def test_stale_processing_upload_recovers_to_error_in_history_endpoint(monkeypat
                     "phase": "tracking",
                     "videoId": "video-stale-processing",
                     "fileName": "clip.mp4",
-                    "locationId": "edsa-sec-walk",
-                    "locationName": "EDSA Sec Walk",
+                    "locationId": "gate-2-9",
+                    "locationName": "Gate 2.9",
                     "date": "2026-04-10",
                     "startTime": "11:00:00",
                     "endTime": "11:05:00",
@@ -850,7 +1357,7 @@ def test_upload_video_cleans_up_when_inference_fails(monkeypatch, tmp_path: Path
         response = client.post(
             "/api/videos",
             data={
-                "locationId": "edsa-sec-walk",
+                "locationId": "gate-2-9",
                 "date": "2026-03-17",
                 "startTime": "10:00",
                 "endTime": "10:01",
@@ -879,8 +1386,8 @@ def test_update_and_delete_location_cascade_to_related_records(monkeypatch, tmp_
     state["videos"] = [
         {
             "id": "video-1",
-            "locationId": "edsa-sec-walk",
-            "location": "EDSA Sec Walk",
+            "locationId": "gate-2-9",
+            "location": "Gate 2.9",
             "timestamp": "10:00",
             "date": "2026-03-17",
             "startTime": "10:00",
@@ -896,7 +1403,7 @@ def test_update_and_delete_location_cascade_to_related_records(monkeypatch, tmp_
         {
             "id": "event-1",
             "type": "detection",
-            "location": "EDSA Sec Walk",
+            "location": "Gate 2.9",
             "timestamp": "10:00:00 AM",
             "description": "Pedestrian ID #3 detected at frame 1",
             "videoId": "video-1",
@@ -907,7 +1414,7 @@ def test_update_and_delete_location_cascade_to_related_records(monkeypatch, tmp_
         {
             "id": "event-2",
             "type": "alert",
-            "location": "EDSA Sec Walk",
+            "location": "Gate 2.9",
             "timestamp": "10:01:00 AM",
             "description": "Manual note",
             "videoId": None,
@@ -917,9 +1424,9 @@ def test_update_and_delete_location_cascade_to_related_records(monkeypatch, tmp_
 
     with TestClient(main.app) as client:
         update_response = client.put(
-            "/api/locations/edsa-sec-walk",
+            "/api/locations/gate-2-9",
             json={
-                "name": "EDSA Sec Walk Updated",
+                "name": "Gate 2.9 Updated",
                 "latitude": 14.64,
                 "longitude": 121.08,
                 "description": "Updated camera view",
@@ -936,27 +1443,27 @@ def test_update_and_delete_location_cascade_to_related_records(monkeypatch, tmp_
 
     assert update_response.status_code == 200
     updated_body = update_response.json()
-    assert updated_body["name"] == "EDSA Sec Walk Updated"
+    assert updated_body["name"] == "Gate 2.9 Updated"
     assert updated_body["latitude"] == 14.64
     assert updated_body["walkableAreaM2"] == 54.5
     assert updated_body["roiCoordinates"]["referenceSize"] == [1920, 1080]
     assert updated_body["videos"][0]["id"] == "video-1"
 
     updated_state = store.load_state()
-    updated_location = next(location for location in updated_state["locations"] if location["id"] == "edsa-sec-walk")
-    assert updated_state["videos"][0]["location"] == "EDSA Sec Walk Updated"
+    updated_location = next(location for location in updated_state["locations"] if location["id"] == "gate-2-9")
+    assert updated_state["videos"][0]["location"] == "Gate 2.9 Updated"
     assert updated_state["videos"][0]["gpsLat"] == 14.64
     assert updated_state["videos"][0]["gpsLng"] == 121.08
     assert updated_location["walkableAreaM2"] == 54.5
     assert updated_location["roiCoordinates"]["includePolygonsNorm"][0][0] == [0.2, 0.2]
-    assert {event["location"] for event in updated_state["events"]} == {"EDSA Sec Walk Updated"}
+    assert {event["location"] for event in updated_state["events"]} == {"Gate 2.9 Updated"}
 
     with TestClient(main.app) as client:
-        delete_response = client.delete("/api/locations/edsa-sec-walk")
+        delete_response = client.delete("/api/locations/gate-2-9")
 
     assert delete_response.status_code == 204
     after_delete = store.load_state()
-    assert all(location["id"] != "edsa-sec-walk" for location in after_delete["locations"])
+    assert all(location["id"] != "gate-2-9" for location in after_delete["locations"])
     assert after_delete["videos"] == []
     assert after_delete["events"] == []
     assert not raw_file.exists()
@@ -1055,8 +1562,8 @@ def test_delete_video_removes_state_and_media(monkeypatch, tmp_path: Path) -> No
     state["videos"] = [
         {
             "id": "video-1",
-            "locationId": "edsa-sec-walk",
-            "location": "EDSA Sec Walk",
+            "locationId": "gate-2-9",
+            "location": "Gate 2.9",
             "timestamp": "10:00",
             "date": "2026-03-17",
             "startTime": "10:00",
@@ -1072,7 +1579,7 @@ def test_delete_video_removes_state_and_media(monkeypatch, tmp_path: Path) -> No
         {
             "id": "event-1",
             "type": "detection",
-            "location": "EDSA Sec Walk",
+            "location": "Gate 2.9",
             "timestamp": "10:00:00 AM",
             "description": "Pedestrian ID #3 detected at frame 1",
             "videoId": "video-1",
@@ -1103,8 +1610,8 @@ def test_search_endpoint_returns_ranked_pedestrian_track_matches(monkeypatch, tm
     state["videos"] = [
         {
             "id": "video-1",
-            "locationId": "edsa-sec-walk",
-            "location": "EDSA Sec Walk",
+            "locationId": "gate-2-9",
+            "location": "Gate 2.9",
             "timestamp": "10:00",
             "date": "2026-03-17",
             "startTime": "10:00",
@@ -1121,7 +1628,7 @@ def test_search_endpoint_returns_ranked_pedestrian_track_matches(monkeypatch, tm
             "id": "track-blue",
             "videoId": "video-1",
             "pedestrianId": 7,
-            "location": "EDSA Sec Walk",
+            "location": "Gate 2.9",
             "firstTimestamp": "10:00:00 AM",
             "lastTimestamp": "10:00:05 AM",
             "bestTimestamp": "10:00:02 AM",
@@ -1141,7 +1648,7 @@ def test_search_endpoint_returns_ranked_pedestrian_track_matches(monkeypatch, tm
             "id": "track-other",
             "videoId": "video-1",
             "pedestrianId": 9,
-            "location": "EDSA Sec Walk",
+            "location": "Gate 2.9",
             "firstTimestamp": "10:04:00 AM",
             "lastTimestamp": "10:04:08 AM",
             "bestTimestamp": "10:04:03 AM",
@@ -1190,8 +1697,8 @@ def test_search_endpoint_skips_query_parser_for_short_queries(monkeypatch, tmp_p
     state["videos"] = [
         {
             "id": "video-1",
-            "locationId": "edsa-sec-walk",
-            "location": "EDSA Sec Walk",
+            "locationId": "gate-2-9",
+            "location": "Gate 2.9",
             "timestamp": "10:00",
             "date": "2026-03-17",
             "startTime": "10:00",
@@ -1208,7 +1715,7 @@ def test_search_endpoint_skips_query_parser_for_short_queries(monkeypatch, tmp_p
             "id": "track-blue",
             "videoId": "video-1",
             "pedestrianId": 7,
-            "location": "EDSA Sec Walk",
+            "location": "Gate 2.9",
             "firstTimestamp": "10:00:00 AM",
             "lastTimestamp": "10:00:05 AM",
             "bestTimestamp": "10:00:02 AM",
@@ -1256,8 +1763,8 @@ def test_search_endpoint_returns_semantic_track_matches_without_gemini(monkeypat
     state["videos"] = [
         {
             "id": "video-1",
-            "locationId": "edsa-sec-walk",
-            "location": "EDSA Sec Walk",
+            "locationId": "gate-2-9",
+            "location": "Gate 2.9",
             "timestamp": "10:00",
             "date": "2026-03-17",
             "startTime": "10:00",
@@ -1274,7 +1781,7 @@ def test_search_endpoint_returns_semantic_track_matches_without_gemini(monkeypat
             "id": "track-semantic",
             "videoId": "video-1",
             "pedestrianId": 12,
-            "location": "EDSA Sec Walk",
+            "location": "Gate 2.9",
             "firstTimestamp": "10:00:00 AM",
             "lastTimestamp": "10:00:08 AM",
             "bestTimestamp": "10:00:03 AM",
@@ -1310,7 +1817,7 @@ def test_search_endpoint_returns_semantic_track_matches_without_gemini(monkeypat
                 "id": "track-semantic",
                 "videoId": "video-1",
                 "pedestrianId": 12,
-                "location": "EDSA Sec Walk",
+                "location": "Gate 2.9",
                 "cropLabel": "late",
                 "matchedCropPath": "storage/videos/processed/video-1/tracks/track-12-late.jpg",
                 "frame": 20,
@@ -1357,8 +1864,8 @@ def test_load_state_backfills_legacy_semantic_crops_from_thumbnail(monkeypatch, 
     state["videos"] = [
         {
             "id": "video-1",
-            "locationId": "edsa-sec-walk",
-            "location": "EDSA Sec Walk",
+            "locationId": "gate-2-9",
+            "location": "Gate 2.9",
             "timestamp": "10:00",
             "date": "2026-03-17",
             "startTime": "10:00",
@@ -1375,7 +1882,7 @@ def test_load_state_backfills_legacy_semantic_crops_from_thumbnail(monkeypatch, 
             "id": "track-legacy-semantic",
             "videoId": "video-1",
             "pedestrianId": 5,
-            "location": "EDSA Sec Walk",
+            "location": "Gate 2.9",
             "bestTimestamp": "10:00:02 AM",
             "bestFrame": 4,
             "bestOffsetSeconds": 2.0,
@@ -1406,8 +1913,8 @@ def test_search_endpoint_expands_descriptive_color_queries_for_ai_ranking(monkey
     state["videos"] = [
         {
             "id": "video-1",
-            "locationId": "edsa-sec-walk",
-            "location": "EDSA Sec Walk",
+            "locationId": "gate-2-9",
+            "location": "Gate 2.9",
             "timestamp": "10:00",
             "date": "2026-03-17",
             "startTime": "10:00",
@@ -1424,7 +1931,7 @@ def test_search_endpoint_expands_descriptive_color_queries_for_ai_ranking(monkey
             "id": "track-purple",
             "videoId": "video-1",
             "pedestrianId": 3,
-            "location": "EDSA Sec Walk",
+            "location": "Gate 2.9",
             "firstTimestamp": "10:01:00 AM",
             "lastTimestamp": "10:01:07 AM",
             "bestTimestamp": "10:01:04 AM",
@@ -1444,7 +1951,7 @@ def test_search_endpoint_expands_descriptive_color_queries_for_ai_ranking(monkey
             "id": "track-neutral",
             "videoId": "video-1",
             "pedestrianId": 4,
-            "location": "EDSA Sec Walk",
+            "location": "Gate 2.9",
             "firstTimestamp": "10:02:00 AM",
             "lastTimestamp": "10:02:05 AM",
             "bestTimestamp": "10:02:02 AM",
@@ -1499,8 +2006,8 @@ def test_search_endpoint_uses_cloud_vision_metadata_for_apparel_queries(monkeypa
     state["videos"] = [
         {
             "id": "video-1",
-            "locationId": "edsa-sec-walk",
-            "location": "EDSA Sec Walk",
+            "locationId": "gate-2-9",
+            "location": "Gate 2.9",
             "timestamp": "10:00",
             "date": "2026-03-17",
             "startTime": "10:00",
@@ -1517,7 +2024,7 @@ def test_search_endpoint_uses_cloud_vision_metadata_for_apparel_queries(monkeypa
             "id": "track-vision",
             "videoId": "video-1",
             "pedestrianId": 14,
-            "location": "EDSA Sec Walk",
+            "location": "Gate 2.9",
             "firstTimestamp": "10:03:00 AM",
             "lastTimestamp": "10:03:07 AM",
             "bestTimestamp": "10:03:02 AM",
@@ -1598,8 +2105,8 @@ def test_search_endpoint_requires_region_specific_color_matches(monkeypatch, tmp
     state["videos"] = [
         {
             "id": "video-1",
-            "locationId": "edsa-sec-walk",
-            "location": "EDSA Sec Walk",
+            "locationId": "gate-2-9",
+            "location": "Gate 2.9",
             "timestamp": "10:00",
             "date": "2026-03-17",
             "startTime": "10:00",
@@ -1616,7 +2123,7 @@ def test_search_endpoint_requires_region_specific_color_matches(monkeypatch, tmp
             "id": "track-blue-shirt",
             "videoId": "video-1",
             "pedestrianId": 7,
-            "location": "EDSA Sec Walk",
+            "location": "Gate 2.9",
             "firstTimestamp": "10:00:00 AM",
             "lastTimestamp": "10:00:05 AM",
             "bestTimestamp": "10:00:02 AM",
@@ -1659,8 +2166,8 @@ def test_search_endpoint_understands_full_sentence_location_queries(monkeypatch,
     state["videos"] = [
         {
             "id": "video-edsa",
-            "locationId": "edsa-sec-walk",
-            "location": "EDSA Sec Walk",
+            "locationId": "gate-2-9",
+            "location": "Gate 2.9",
             "timestamp": "10:00",
             "date": "2026-03-17",
             "startTime": "10:00",
@@ -1673,8 +2180,8 @@ def test_search_endpoint_understands_full_sentence_location_queries(monkeypatch,
         },
         {
             "id": "video-kostka",
-            "locationId": "kostka-walk",
-            "location": "Kostka Walk",
+            "locationId": "gate-3",
+            "location": "Gate 3",
             "timestamp": "11:00",
             "date": "2026-03-17",
             "startTime": "11:00",
@@ -1691,7 +2198,7 @@ def test_search_endpoint_understands_full_sentence_location_queries(monkeypatch,
             "id": "track-red-edsa",
             "videoId": "video-edsa",
             "pedestrianId": 11,
-            "location": "EDSA Sec Walk",
+            "location": "Gate 2.9",
             "firstTimestamp": "10:00:00 AM",
             "lastTimestamp": "10:00:06 AM",
             "bestTimestamp": "10:00:03 AM",
@@ -1711,7 +2218,7 @@ def test_search_endpoint_understands_full_sentence_location_queries(monkeypatch,
             "id": "track-red-kostka",
             "videoId": "video-kostka",
             "pedestrianId": 22,
-            "location": "Kostka Walk",
+            "location": "Gate 3",
             "firstTimestamp": "11:00:00 AM",
             "lastTimestamp": "11:00:05 AM",
             "bestTimestamp": "11:00:02 AM",
@@ -1736,13 +2243,13 @@ def test_search_endpoint_understands_full_sentence_location_queries(monkeypatch,
         main.gemini,
         "parse_search_query",
         lambda query, locations: {
-            "locationId": "edsa-sec-walk",
-            "locationName": "EDSA Sec Walk",
+            "locationId": "gate-2-9",
+            "locationName": "Gate 2.9",
             "appearanceTerms": ["red"],
             "softTerms": ["short", "dress"],
             "unsupportedTerms": [],
             "regionColorRequirements": [{"region": "upper clothing", "colors": ["red"]}],
-            "summary": "Interpret the query as a person at Xavier Hall / EDSA Sec Walk with red clothing; short and dress are soft preferences.",
+            "summary": "Interpret the query as a person at Xavier Hall / Gate 2.9 with red clothing; short and dress are soft preferences.",
         },
     )
 
@@ -1760,9 +2267,9 @@ def test_search_endpoint_understands_full_sentence_location_queries(monkeypatch,
     body = response.json()
     assert len(body) == 1
     assert body[0]["id"] == "track-red-edsa"
-    assert body[0]["location"] == "EDSA Sec Walk"
+    assert body[0]["location"] == "Gate 2.9"
     assert observed["candidate_ids"] == ["track-red-edsa"]
-    assert "Required location: EDSA Sec Walk" in str(observed["query"])
+    assert "Required location: Gate 2.9" in str(observed["query"])
     assert "Soft preferences" in str(observed["query"])
 
 
@@ -1773,8 +2280,8 @@ def test_search_endpoint_falls_back_when_query_parser_is_unavailable(monkeypatch
     state["videos"] = [
         {
             "id": "video-1",
-            "locationId": "edsa-sec-walk",
-            "location": "EDSA Sec Walk",
+            "locationId": "gate-2-9",
+            "location": "Gate 2.9",
             "timestamp": "10:00",
             "date": "2026-03-17",
             "startTime": "10:00",
@@ -1791,7 +2298,7 @@ def test_search_endpoint_falls_back_when_query_parser_is_unavailable(monkeypatch
             "id": "track-blue",
             "videoId": "video-1",
             "pedestrianId": 7,
-            "location": "EDSA Sec Walk",
+            "location": "Gate 2.9",
             "firstTimestamp": "10:00:00 AM",
             "lastTimestamp": "10:00:05 AM",
             "bestTimestamp": "10:00:02 AM",
@@ -1833,8 +2340,8 @@ def test_search_endpoint_matches_white_shirt_from_appearance_summary(monkeypatch
     state["videos"] = [
         {
             "id": "video-1",
-            "locationId": "edsa-sec-walk",
-            "location": "EDSA Sec Walk",
+            "locationId": "gate-2-9",
+            "location": "Gate 2.9",
             "timestamp": "10:00",
             "date": "2026-03-17",
             "startTime": "10:00",
@@ -1851,7 +2358,7 @@ def test_search_endpoint_matches_white_shirt_from_appearance_summary(monkeypatch
             "id": "track-white-shirt",
             "videoId": "video-1",
             "pedestrianId": 5,
-            "location": "EDSA Sec Walk",
+            "location": "Gate 2.9",
             "firstTimestamp": "10:00:00 AM",
             "lastTimestamp": "10:00:05 AM",
             "bestTimestamp": "10:00:02 AM",
@@ -1894,8 +2401,8 @@ def test_search_endpoint_tolerates_white_gray_camera_shift_for_upper_clothing(mo
     state["videos"] = [
         {
             "id": "video-1",
-            "locationId": "edsa-sec-walk",
-            "location": "EDSA Sec Walk",
+            "locationId": "gate-2-9",
+            "location": "Gate 2.9",
             "timestamp": "10:00",
             "date": "2026-03-17",
             "startTime": "10:00",
@@ -1912,7 +2419,7 @@ def test_search_endpoint_tolerates_white_gray_camera_shift_for_upper_clothing(mo
             "id": "track-gray-shirt",
             "videoId": "video-1",
             "pedestrianId": 16,
-            "location": "EDSA Sec Walk",
+            "location": "Gate 2.9",
             "firstTimestamp": "10:02:00 AM",
             "lastTimestamp": "10:02:05 AM",
             "bestTimestamp": "10:02:02 AM",
@@ -1963,8 +2470,8 @@ def test_search_endpoint_accepts_mixed_white_gray_shirt_queries(monkeypatch, tmp
     state["videos"] = [
         {
             "id": "video-1",
-            "locationId": "edsa-sec-walk",
-            "location": "EDSA Sec Walk",
+            "locationId": "gate-2-9",
+            "location": "Gate 2.9",
             "timestamp": "10:00",
             "date": "2026-03-17",
             "startTime": "10:00",
@@ -1981,7 +2488,7 @@ def test_search_endpoint_accepts_mixed_white_gray_shirt_queries(monkeypatch, tmp
             "id": "track-white-gray-shirt",
             "videoId": "video-1",
             "pedestrianId": 15,
-            "location": "EDSA Sec Walk",
+            "location": "Gate 2.9",
             "firstTimestamp": "10:01:00 AM",
             "lastTimestamp": "10:01:06 AM",
             "bestTimestamp": "10:01:02 AM",
@@ -2035,8 +2542,8 @@ def test_search_endpoint_backfills_legacy_video_metadata(monkeypatch, tmp_path: 
     state["videos"] = [
         {
             "id": "legacy-video-1",
-            "locationId": "edsa-sec-walk",
-            "location": "EDSA Sec Walk",
+            "locationId": "gate-2-9",
+            "location": "Gate 2.9",
             "timestamp": "10:00",
             "date": "2026-03-17",
             "startTime": "10:00",
@@ -2159,8 +2666,8 @@ def test_search_endpoint_returns_event_offset_seconds(monkeypatch, tmp_path: Pat
     state["videos"] = [
         {
             "id": "video-1",
-            "locationId": "edsa-sec-walk",
-            "location": "EDSA Sec Walk",
+            "locationId": "gate-2-9",
+            "location": "Gate 2.9",
             "timestamp": "10:00",
             "date": "2026-03-17",
             "startTime": "10:00",
@@ -2176,7 +2683,7 @@ def test_search_endpoint_returns_event_offset_seconds(monkeypatch, tmp_path: Pat
         {
             "id": "evt-1",
             "type": "detection",
-            "location": "EDSA Sec Walk",
+            "location": "Gate 2.9",
             "timestamp": "10:00:08 AM",
             "description": "Sleeveless maroon top pedestrian detected near crosswalk",
             "videoId": "video-1",
@@ -2204,8 +2711,8 @@ def test_search_endpoint_does_not_match_generic_events_for_descriptive_queries(m
     state["videos"] = [
         {
             "id": "video-1",
-            "locationId": "edsa-sec-walk",
-            "location": "EDSA Sec Walk",
+            "locationId": "gate-2-9",
+            "location": "Gate 2.9",
             "timestamp": "10:00",
             "date": "2026-03-17",
             "startTime": "10:00",
@@ -2221,7 +2728,7 @@ def test_search_endpoint_does_not_match_generic_events_for_descriptive_queries(m
         {
             "id": "evt-generic",
             "type": "detection",
-            "location": "EDSA Sec Walk",
+            "location": "Gate 2.9",
             "timestamp": "10:00:08 AM",
             "description": "Pedestrian ID #11 detected at frame 24",
             "videoId": "video-1",
@@ -2244,7 +2751,7 @@ def test_dashboard_endpoints_only_surface_real_footage_and_neutral_empty_locatio
 
     state = store.seed_state()
     for location in state["locations"]:
-        if location["id"] == "edsa-sec-walk":
+        if location["id"] == "gate-2-9":
             location["roiCoordinates"] = {
                 "referenceSize": [1920, 1080],
                 "includePolygonsNorm": [
@@ -2256,8 +2763,8 @@ def test_dashboard_endpoints_only_surface_real_footage_and_neutral_empty_locatio
     state["videos"] = [
         {
             "id": "video-1",
-            "locationId": "edsa-sec-walk",
-            "location": "EDSA Sec Walk",
+            "locationId": "gate-2-9",
+            "location": "Gate 2.9",
             "timestamp": "10:00",
             "date": "2026-03-17",
             "startTime": "10:00",
@@ -2274,7 +2781,7 @@ def test_dashboard_endpoints_only_surface_real_footage_and_neutral_empty_locatio
             "id": "track-in-roi",
             "videoId": "video-1",
             "pedestrianId": 1,
-            "location": "EDSA Sec Walk",
+            "location": "Gate 2.9",
             "firstTimestamp": "10:01:00 AM",
             "lastTimestamp": "10:01:30 AM",
             "bestTimestamp": "10:01:10 AM",
@@ -2291,7 +2798,7 @@ def test_dashboard_endpoints_only_surface_real_footage_and_neutral_empty_locatio
             "id": "track-outside-roi",
             "videoId": "video-1",
             "pedestrianId": 2,
-            "location": "EDSA Sec Walk",
+            "location": "Gate 2.9",
             "firstTimestamp": "10:05:00 AM",
             "lastTimestamp": "10:05:20 AM",
             "bestTimestamp": "10:05:10 AM",
@@ -2308,7 +2815,7 @@ def test_dashboard_endpoints_only_surface_real_footage_and_neutral_empty_locatio
             "id": "track-in-roi-no-occlusion",
             "videoId": "video-1",
             "pedestrianId": 3,
-            "location": "EDSA Sec Walk",
+            "location": "Gate 2.9",
             "firstTimestamp": "10:08:00 AM",
             "lastTimestamp": "10:08:15 AM",
             "bestTimestamp": "10:08:05 AM",
@@ -2326,7 +2833,7 @@ def test_dashboard_endpoints_only_surface_real_footage_and_neutral_empty_locatio
         {
             "id": "event-1",
             "type": "detection",
-            "location": "EDSA Sec Walk",
+            "location": "Gate 2.9",
             "timestamp": "10:01:00",
             "description": "Light occlusion pedestrian ID #1 detected at frame 10",
             "videoId": "video-1",
@@ -2338,7 +2845,7 @@ def test_dashboard_endpoints_only_surface_real_footage_and_neutral_empty_locatio
         {
             "id": "event-2",
             "type": "detection",
-            "location": "EDSA Sec Walk",
+            "location": "Gate 2.9",
             "timestamp": "10:05:00",
             "description": "Moderate occlusion pedestrian ID #2 detected at frame 20",
             "videoId": "video-1",
@@ -2350,7 +2857,7 @@ def test_dashboard_endpoints_only_surface_real_footage_and_neutral_empty_locatio
         {
             "id": "event-3",
             "type": "detection",
-            "location": "EDSA Sec Walk",
+            "location": "Gate 2.9",
             "timestamp": "10:08:00",
             "description": "Pedestrian ID #3 detected at frame 30",
             "videoId": "video-1",
@@ -2398,12 +2905,12 @@ def test_dashboard_endpoints_only_surface_real_footage_and_neutral_empty_locatio
     assert traffic["zoomLevel"] == 0
     assert traffic["canZoomIn"] is True
     assert traffic["isDrilldown"] is False
-    assert traffic["locationTotals"][0] == {"location": "EDSA Sec Walk", "totalPedestrians": 3}
+    assert traffic["locationTotals"][0] == {"location": "Gate 2.9", "totalPedestrians": 3}
     whole_day_bucket = next(point for point in traffic["series"] if point["time"] == "10:00")
-    assert set(whole_day_bucket.keys()) == {"id", "time", "cumulativeUniquePedestrians", "averageVisiblePedestrians", "EDSA Sec Walk"}
+    assert set(whole_day_bucket.keys()) == {"id", "time", "cumulativeUniquePedestrians", "averageVisiblePedestrians", "Gate 2.9"}
     assert whole_day_bucket["id"].startswith("2026-03-17T10:00:00")
     assert whole_day_bucket["cumulativeUniquePedestrians"] == 3
-    assert whole_day_bucket["EDSA Sec Walk"] == 3
+    assert whole_day_bucket["Gate 2.9"] == 3
     assert whole_day_bucket["averageVisiblePedestrians"] == 1.0
 
     drilldown = drilldown_response.json()
@@ -2417,7 +2924,7 @@ def test_dashboard_endpoints_only_surface_real_footage_and_neutral_empty_locatio
     assert any(point["time"] == "10:00" for point in drilldown["series"])
     first_drill_bucket = next(point for point in drilldown["series"] if point["time"] == "10:00")
     assert first_drill_bucket["cumulativeUniquePedestrians"] == 3
-    assert first_drill_bucket["EDSA Sec Walk"] == 3
+    assert first_drill_bucket["Gate 2.9"] == 3
     assert first_drill_bucket["averageVisiblePedestrians"] == 1.0
 
     nested_drilldown = nested_drilldown_response.json()
@@ -2444,8 +2951,8 @@ def test_dashboard_endpoints_only_surface_real_footage_and_neutral_empty_locatio
     occlusion = occlusion_response.json()
     assert "10:00" in occlusion["availableHours"]
 
-    edsa_sec_walk = next(location for location in occlusion["locations"] if location["id"] == "edsa-sec-walk")
-    kostka_walk = next(location for location in occlusion["locations"] if location["id"] == "kostka-walk")
+    edsa_sec_walk = next(location for location in occlusion["locations"] if location["id"] == "gate-2-9")
+    kostka_walk = next(location for location in occlusion["locations"] if location["id"] == "gate-3")
 
     assert edsa_sec_walk["hasFootage"] is True
     assert edsa_sec_walk["hasPTSIData"] is True
@@ -2490,7 +2997,7 @@ def test_dashboard_occlusion_uses_per_second_trajectory_samples_for_ptsi(monkeyp
 
     state = store.seed_state()
     for location in state["locations"]:
-        if location["id"] == "edsa-sec-walk":
+        if location["id"] == "gate-2-9":
             location["roiCoordinates"] = {
                 "referenceSize": [1920, 1080],
                 "includePolygonsNorm": [[[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]],
@@ -2500,8 +3007,8 @@ def test_dashboard_occlusion_uses_per_second_trajectory_samples_for_ptsi(monkeyp
     state["videos"] = [
         {
             "id": "video-ptsi-1",
-            "locationId": "edsa-sec-walk",
-            "location": "EDSA Sec Walk",
+            "locationId": "gate-2-9",
+            "location": "Gate 2.9",
             "timestamp": "10:00",
             "date": "2026-03-17",
             "startTime": "10:00",
@@ -2518,21 +3025,21 @@ def test_dashboard_occlusion_uses_per_second_trajectory_samples_for_ptsi(monkeyp
             "id": "track-a",
             "videoId": "video-ptsi-1",
             "pedestrianId": 1,
-            "location": "EDSA Sec Walk",
+            "location": "Gate 2.9",
             "trajectorySamples": [[0, 0.2, 0.2, None]],
         },
         {
             "id": "track-b",
             "videoId": "video-ptsi-1",
             "pedestrianId": 2,
-            "location": "EDSA Sec Walk",
+            "location": "Gate 2.9",
             "trajectorySamples": [[1, 0.35, 0.35, 2]],
         },
         {
             "id": "track-c",
             "videoId": "video-ptsi-1",
             "pedestrianId": 3,
-            "location": "EDSA Sec Walk",
+            "location": "Gate 2.9",
             "trajectorySamples": [[1, 0.45, 0.45, None]],
         },
     ]
@@ -2543,7 +3050,7 @@ def test_dashboard_occlusion_uses_per_second_trajectory_samples_for_ptsi(monkeyp
 
     assert response.status_code == 200
     payload = response.json()
-    edsa_sec_walk = next(location for location in payload["locations"] if location["id"] == "edsa-sec-walk")
+    edsa_sec_walk = next(location for location in payload["locations"] if location["id"] == "gate-2-9")
 
     assert edsa_sec_walk["hasPTSIData"] is True
     assert edsa_sec_walk["mode"] == "roi-testing"
@@ -2585,7 +3092,7 @@ def test_dashboard_occlusion_all_hours_summary_uses_selected_range_totals(monkey
 
     state = store.seed_state()
     for location in state["locations"]:
-        if location["id"] == "edsa-sec-walk":
+        if location["id"] == "gate-2-9":
             location["roiCoordinates"] = {
                 "referenceSize": [1920, 1080],
                 "includePolygonsNorm": [[[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]],
@@ -2595,8 +3102,8 @@ def test_dashboard_occlusion_all_hours_summary_uses_selected_range_totals(monkey
     state["videos"] = [
         {
             "id": "video-ptsi-all-hours",
-            "locationId": "edsa-sec-walk",
-            "location": "EDSA Sec Walk",
+            "locationId": "gate-2-9",
+            "location": "Gate 2.9",
             "timestamp": "10:00",
             "date": "2026-03-17",
             "startTime": "10:00",
@@ -2613,21 +3120,21 @@ def test_dashboard_occlusion_all_hours_summary_uses_selected_range_totals(monkey
             "id": "track-all-hours-a",
             "videoId": "video-ptsi-all-hours",
             "pedestrianId": 1,
-            "location": "EDSA Sec Walk",
+            "location": "Gate 2.9",
             "trajectorySamples": [[0, 0.2, 0.2, None], [3600, 0.2, 0.2, None]],
         },
         {
             "id": "track-all-hours-b",
             "videoId": "video-ptsi-all-hours",
             "pedestrianId": 2,
-            "location": "EDSA Sec Walk",
+            "location": "Gate 2.9",
             "trajectorySamples": [[0, 0.35, 0.35, None]],
         },
         {
             "id": "track-all-hours-c",
             "videoId": "video-ptsi-all-hours",
             "pedestrianId": 3,
-            "location": "EDSA Sec Walk",
+            "location": "Gate 2.9",
             "trajectorySamples": [[3600, 0.45, 0.45, 2]],
         },
     ]
@@ -2640,7 +3147,7 @@ def test_dashboard_occlusion_all_hours_summary_uses_selected_range_totals(monkey
     payload = response.json()
     assert {"10:00", "11:00"}.issubset(set(payload["availableHours"]))
 
-    edsa_sec_walk = next(location for location in payload["locations"] if location["id"] == "edsa-sec-walk")
+    edsa_sec_walk = next(location for location in payload["locations"] if location["id"] == "gate-2-9")
     ten_oclock = next(score for score in edsa_sec_walk["hourlyScores"] if score["hour"] == "10:00")
     eleven_oclock = next(score for score in edsa_sec_walk["hourlyScores"] if score["hour"] == "11:00")
 
@@ -2706,7 +3213,7 @@ def test_dashboard_occlusion_emits_ptsi_debug_logs_when_enabled(monkeypatch, tmp
 
     state = store.seed_state()
     for location in state["locations"]:
-        if location["id"] == "edsa-sec-walk":
+        if location["id"] == "gate-2-9":
             location["roiCoordinates"] = {
                 "referenceSize": [1920, 1080],
                 "includePolygonsNorm": [[[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]],
@@ -2716,8 +3223,8 @@ def test_dashboard_occlusion_emits_ptsi_debug_logs_when_enabled(monkeypatch, tmp
     state["videos"] = [
         {
             "id": "video-ptsi-debug",
-            "locationId": "edsa-sec-walk",
-            "location": "EDSA Sec Walk",
+            "locationId": "gate-2-9",
+            "location": "Gate 2.9",
             "timestamp": "10:00",
             "date": "2026-03-17",
             "startTime": "10:00",
@@ -2734,14 +3241,14 @@ def test_dashboard_occlusion_emits_ptsi_debug_logs_when_enabled(monkeypatch, tmp
             "id": "track-debug-a",
             "videoId": "video-ptsi-debug",
             "pedestrianId": 1,
-            "location": "EDSA Sec Walk",
+            "location": "Gate 2.9",
             "trajectorySamples": [[0, 0.25, 0.25, 0]],
         },
         {
             "id": "track-debug-b",
             "videoId": "video-ptsi-debug",
             "pedestrianId": 2,
-            "location": "EDSA Sec Walk",
+            "location": "Gate 2.9",
             "trajectorySamples": [[0, 0.35, 0.35, 2]],
         },
     ]
@@ -2766,8 +3273,8 @@ def test_dashboard_traffic_uses_full_track_totals_instead_of_truncated_events(mo
     state["videos"] = [
         {
             "id": "video-kostka-1",
-            "locationId": "kostka-walk",
-            "location": "Kostka Walk",
+            "locationId": "gate-3",
+            "location": "Gate 3",
             "timestamp": "10:00",
             "date": "2026-03-17",
             "startTime": "10:00",
@@ -2780,8 +3287,8 @@ def test_dashboard_traffic_uses_full_track_totals_instead_of_truncated_events(mo
         },
         {
             "id": "video-kostka-2",
-            "locationId": "kostka-walk",
-            "location": "Kostka Walk",
+            "locationId": "gate-3",
+            "location": "Gate 3",
             "timestamp": "10:10",
             "date": "2026-03-17",
             "startTime": "10:10",
@@ -2797,7 +3304,7 @@ def test_dashboard_traffic_uses_full_track_totals_instead_of_truncated_events(mo
         {
             "id": "evt-kostka-1",
             "type": "detection",
-            "location": "Kostka Walk",
+            "location": "Gate 3",
             "timestamp": "10:00:00 AM",
             "description": "Pedestrian ID #1 detected at frame 1",
             "videoId": "video-kostka-1",
@@ -2808,7 +3315,7 @@ def test_dashboard_traffic_uses_full_track_totals_instead_of_truncated_events(mo
         {
             "id": "evt-kostka-2",
             "type": "detection",
-            "location": "Kostka Walk",
+            "location": "Gate 3",
             "timestamp": "10:02:00 AM",
             "description": "Pedestrian ID #2 detected at frame 20",
             "videoId": "video-kostka-1",
@@ -2819,7 +3326,7 @@ def test_dashboard_traffic_uses_full_track_totals_instead_of_truncated_events(mo
         {
             "id": "evt-kostka-3",
             "type": "detection",
-            "location": "Kostka Walk",
+            "location": "Gate 3",
             "timestamp": "10:10:00 AM",
             "description": "Pedestrian ID #1 detected at frame 1",
             "videoId": "video-kostka-2",
@@ -2833,7 +3340,7 @@ def test_dashboard_traffic_uses_full_track_totals_instead_of_truncated_events(mo
             "id": f"track-kostka-1-{pedestrian_id}",
             "videoId": "video-kostka-1",
             "pedestrianId": pedestrian_id,
-            "location": "Kostka Walk",
+            "location": "Gate 3",
             "firstTimestamp": timestamp,
             "bestTimestamp": timestamp,
             "firstOffsetSeconds": float(offset_seconds),
@@ -2851,7 +3358,7 @@ def test_dashboard_traffic_uses_full_track_totals_instead_of_truncated_events(mo
             "id": f"track-kostka-2-{pedestrian_id}",
             "videoId": "video-kostka-2",
             "pedestrianId": pedestrian_id,
-            "location": "Kostka Walk",
+            "location": "Gate 3",
             "firstTimestamp": timestamp,
             "bestTimestamp": timestamp,
             "firstOffsetSeconds": float(offset_seconds),
@@ -2877,9 +3384,9 @@ def test_dashboard_traffic_uses_full_track_totals_instead_of_truncated_events(mo
     whole_day_bucket = next(point for point in traffic["series"] if point["time"] == "10:00")
 
     assert summary["totalUniquePedestrians"] == 8
-    assert traffic["locationTotals"] == [{"location": "Kostka Walk", "totalPedestrians": 8}]
+    assert traffic["locationTotals"] == [{"location": "Gate 3", "totalPedestrians": 8}]
     assert whole_day_bucket["cumulativeUniquePedestrians"] == 8
-    assert whole_day_bucket["Kostka Walk"] == 8
+    assert whole_day_bucket["Gate 3"] == 8
     assert whole_day_bucket["averageVisiblePedestrians"] == 1.0
 
 
@@ -2890,8 +3397,8 @@ def test_dashboard_traffic_returns_per_location_cumulative_series(monkeypatch, t
     state["videos"] = [
         {
             "id": "video-edsa-1",
-            "locationId": "edsa-sec-walk",
-            "location": "EDSA Sec Walk",
+            "locationId": "gate-2-9",
+            "location": "Gate 2.9",
             "timestamp": "10:00",
             "date": "2026-03-17",
             "startTime": "10:00",
@@ -2904,8 +3411,8 @@ def test_dashboard_traffic_returns_per_location_cumulative_series(monkeypatch, t
         },
         {
             "id": "video-kostka-1",
-            "locationId": "kostka-walk",
-            "location": "Kostka Walk",
+            "locationId": "gate-3",
+            "location": "Gate 3",
             "timestamp": "10:20",
             "date": "2026-03-17",
             "startTime": "10:20",
@@ -2921,7 +3428,7 @@ def test_dashboard_traffic_returns_per_location_cumulative_series(monkeypatch, t
         {
             "id": "event-edsa-1",
             "type": "detection",
-            "location": "EDSA Sec Walk",
+            "location": "Gate 2.9",
             "timestamp": "10:01:00",
             "description": "Pedestrian ID #1 detected at frame 10",
             "videoId": "video-edsa-1",
@@ -2932,7 +3439,7 @@ def test_dashboard_traffic_returns_per_location_cumulative_series(monkeypatch, t
         {
             "id": "event-edsa-2",
             "type": "detection",
-            "location": "EDSA Sec Walk",
+            "location": "Gate 2.9",
             "timestamp": "10:05:00",
             "description": "Pedestrian ID #2 detected at frame 20",
             "videoId": "video-edsa-1",
@@ -2943,7 +3450,7 @@ def test_dashboard_traffic_returns_per_location_cumulative_series(monkeypatch, t
         {
             "id": "event-kostka-1",
             "type": "detection",
-            "location": "Kostka Walk",
+            "location": "Gate 3",
             "timestamp": "10:21:00",
             "description": "Pedestrian ID #1 detected at frame 15",
             "videoId": "video-kostka-1",
@@ -2967,22 +3474,22 @@ def test_dashboard_traffic_returns_per_location_cumulative_series(monkeypatch, t
     traffic = traffic_response.json()
     assert all("id" in point for point in traffic["series"])
     assert traffic["locationTotals"] == [
-        {"location": "EDSA Sec Walk", "totalPedestrians": 2},
-        {"location": "Kostka Walk", "totalPedestrians": 1},
+        {"location": "Gate 2.9", "totalPedestrians": 2},
+        {"location": "Gate 3", "totalPedestrians": 1},
     ]
 
     whole_day_bucket = next(point for point in traffic["series"] if point["time"] == "10:00")
     assert whole_day_bucket["cumulativeUniquePedestrians"] == 3
-    assert whole_day_bucket["EDSA Sec Walk"] == 2
-    assert whole_day_bucket["Kostka Walk"] == 1
+    assert whole_day_bucket["Gate 2.9"] == 2
+    assert whole_day_bucket["Gate 3"] == 1
 
     drilldown = drilldown_response.json()
     ten_oclock_bucket = next(point for point in drilldown["series"] if point["time"] == "10:00")
     ten_fifteen_bucket = next(point for point in drilldown["series"] if point["time"] == "10:15")
 
     assert ten_oclock_bucket["cumulativeUniquePedestrians"] == 2
-    assert ten_oclock_bucket["EDSA Sec Walk"] == 2
-    assert ten_oclock_bucket["Kostka Walk"] == 0
+    assert ten_oclock_bucket["Gate 2.9"] == 2
+    assert ten_oclock_bucket["Gate 3"] == 0
     assert ten_fifteen_bucket["cumulativeUniquePedestrians"] == 3
-    assert ten_fifteen_bucket["EDSA Sec Walk"] == 2
-    assert ten_fifteen_bucket["Kostka Walk"] == 1
+    assert ten_fifteen_bucket["Gate 2.9"] == 2
+    assert ten_fifteen_bucket["Gate 3"] == 1

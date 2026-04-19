@@ -520,8 +520,9 @@ def get_inference_status() -> dict:
 @app.post("/api/models/upload", response_model=schemas.ModelInfo, status_code=201)
 async def upload_model(file: UploadFile = File(...)) -> dict:
     filename = safe_filename(file.filename or "model.pt")
-    if not filename.endswith(".pt"):
-        raise HTTPException(status_code=400, detail="Only .pt model files are supported")
+    suffix = Path(filename).suffix.lower()
+    if suffix not in {".pt", ".pth"}:
+        raise HTTPException(status_code=400, detail="Only .pt or .pth model files are supported")
     target = store.MODELS_DIR / filename
     target.write_bytes(await file.read())
     return store.set_model(filename)

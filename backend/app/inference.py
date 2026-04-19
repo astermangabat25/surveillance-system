@@ -1,25 +1,35 @@
 from __future__ import annotations
 
 import colorsys
-import importlib
-import importlib.util
+import csv
+import os
 import re
+import signal
+import subprocess
 import sys
+import time
 from collections.abc import Callable
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Optional
-from uuid import uuid4
 
 from . import store, vision
 
-PREFERRED_ULTRALYTICS_TAG = "v8.3.228"
-FALLBACK_ULTRALYTICS_TAG = "v8.3.50"
+PREFERRED_ULTRALYTICS_TAG = "rtdetr-cli"
+FALLBACK_ULTRALYTICS_TAG = "rtdetr-cli-cpu"
 VIDEO_SUFFIXES = (".mp4", ".avi", ".mov", ".mkv", ".m4v")
 MAX_TRACK_EVENTS = 50
 TRACK_THUMBNAIL_MAX_EDGE = 224
 SEMANTIC_CROP_LABEL_ORDER = ("best", "early", "mid", "late")
 CLOCK_TIME_FORMATS = ("%H:%M", "%H:%M:%S", "%I:%M %p", "%I:%M:%S %p")
+_DEFAULT_INFERENCE_MAX_RUNTIME_SECONDS = 1800.0
+try:
+    INFERENCE_MAX_RUNTIME_SECONDS = max(
+        1.0,
+        float(os.getenv("INFERENCE_MAX_RUNTIME_SECONDS", str(_DEFAULT_INFERENCE_MAX_RUNTIME_SECONDS))),
+    )
+except (TypeError, ValueError):
+    INFERENCE_MAX_RUNTIME_SECONDS = _DEFAULT_INFERENCE_MAX_RUNTIME_SECONDS
 
 
 def _foot_point_norm(bounds: tuple[int, int, int, int], frame_image: Any) -> Optional[list[float]]:
@@ -38,36 +48,89 @@ def _foot_point_norm(bounds: tuple[int, int, int, int], frame_image: Any) -> Opt
     return [round(foot_x, 6), round(foot_y, 6)]
 
 
-def _vendored_ultralytics_dir() -> Path:
-    return store.BACKEND_DIR / "vendor" / "ultralytics"
+def _thesis_root_dir() -> Path:
+    return store.BACKEND_DIR.parent.parent
 
 
-def _prefer_vendored_ultralytics() -> Optional[Path]:
-    vendor_dir = _vendored_ultralytics_dir()
-    if not vendor_dir.exists():
+def _occlusion_repo_dir() -> Path:
+    thesis_layout_candidate = _thesis_root_dir() / "Occlusion-Robust-RTDETR"
+    sibling_layout_candidate = store.BACKEND_DIR.parent / "Occlusion-Robust-RTDETR"
+    if thesis_layout_candidate.exists() or not sibling_layout_candidate.exists():
+        return thesis_layout_candidate
+    return sibling_layout_candidate
+
+
+def _infer_script_path() -> Path:
+    return _occlusion_repo_dir() / "tools" / "infer.py"
+
+
+def _infer_config_path() -> Path:
+    return _occlusion_repo_dir() / "configs" / "rtdetr" / "rtdetr_r50_final.yml"
+
+
+def _infer_annotations_path() -> Path:
+    return _occlusion_repo_dir() / "configs" / "dataset" / "MergedAll" / "annotations" / "instances_train.json"
+
+
+def _normalized_counting_location_suffix(location_name: Optional[str]) -> Optional[str]:
+    if location_name is None:
         return None
 
-    vendor_dir_str = str(vendor_dir.resolve())
-    if sys.path[:1] != [vendor_dir_str]:
-        try:
-            sys.path.remove(vendor_dir_str)
-        except ValueError:
-            pass
-        sys.path.insert(0, vendor_dir_str)
-        importlib.invalidate_caches()
+    normalized_location = re.sub(r"[^a-z0-9.]+", " ", str(location_name).strip().lower()).strip()
+    compact_location = re.sub(r"[^a-z0-9.]+", "", normalized_location)
+    if not compact_location:
+        return None
 
-    return vendor_dir
+    has_gate_keyword = (
+        re.search(r"\bgate\b", normalized_location) is not None
+        or re.search(r"\bgate\s*\d", normalized_location) is not None
+        or compact_location.startswith("gate")
+    )
+    has_g_prefix = re.match(r"^g\d", compact_location) is not None
+    if not has_gate_keyword and not has_g_prefix:
+        return None
+
+    gate_match: Optional[re.Match[str]] = None
+    if has_g_prefix:
+        gate_match = re.match(r"^g(?P<gate>\d\.\d|\d{2}|\d)", compact_location)
+
+    if gate_match is None and has_gate_keyword:
+        gate_match = re.search(r"\bgate\s*(?P<gate>\d\.\d|\d{2}|\d)\b", normalized_location)
+        if gate_match is None:
+            gate_match = re.search(r"gate(?P<gate>\d\.\d|\d{2}|\d)", compact_location)
+
+    if gate_match is None:
+        return None
+
+    normalized_gate = {
+        "2": "g2",
+        "29": "g2.9",
+        "2.9": "g2.9",
+        "3": "g3",
+        "32": "g3.2",
+        "3.2": "g3.2",
+        "35": "g3.5",
+        "3.5": "g3.5",
+    }.get(gate_match.group("gate"))
+    return normalized_gate
 
 
-def _module_is_within(path_value: Optional[str], root: Optional[Path]) -> bool:
-    if not path_value or root is None:
-        return False
+def _infer_counting_config_path(location_name: Optional[str] = None) -> Path:
+    occlusion_root = _occlusion_repo_dir()
+    fallback_path = occlusion_root / "counting_config_g2.9.json"
+    suffix = _normalized_counting_location_suffix(location_name)
+    if not suffix:
+        return fallback_path
 
-    try:
-        Path(path_value).resolve().relative_to(root.resolve())
-        return True
-    except ValueError:
-        return False
+    configured_path = occlusion_root / f"counting_config_{suffix}.json"
+    if configured_path.exists():
+        return configured_path
+
+    return fallback_path
+
+
+def _first_missing_path(paths: list[Path]) -> Optional[Path]:
+    return next((path for path in paths if not path.exists()), None)
 
 
 def resolve_model_path(model_name: Optional[str]) -> Optional[Path]:
@@ -84,33 +147,38 @@ def ultralytics_status() -> dict[str, Any]:
     model_info = store.get_model_info()
     model_name = model_info.get("currentModel")
     model_path = resolve_model_path(model_name)
-    vendor_dir = _prefer_vendored_ultralytics()
-
-    installed = importlib.util.find_spec("ultralytics") is not None
+    repo_dir = _occlusion_repo_dir()
+    infer_script = _infer_script_path()
+    fixed_required_paths = [
+        repo_dir,
+        infer_script,
+        _infer_config_path(),
+        _infer_annotations_path(),
+        _infer_counting_config_path(),
+    ]
+    missing_fixed_path = _first_missing_path(fixed_required_paths)
+    pipeline_installed = missing_fixed_path is None
     version = None
-    package_path = None
-    if installed:
+    if pipeline_installed:
         try:
-            from ultralytics import __file__ as ultralytics_file
-            from ultralytics import __version__ as ultralytics_version
-
-            version = ultralytics_version
-            package_path = ultralytics_file
-        except Exception:
+            version = infer_script.stat().st_mtime_ns
+            version = str(version)
+        except OSError:
             version = "installed"
 
     return {
-        "installed": installed,
+        "installed": pipeline_installed,
         "version": version,
-        "packagePath": package_path,
-        "vendoredPath": _backend_relative_path(vendor_dir),
-        "usingVendoredCopy": _module_is_within(package_path, vendor_dir),
+        "packagePath": str(infer_script),
+        "vendoredPath": _backend_relative_path(repo_dir),
+        "usingVendoredCopy": pipeline_installed,
         "preferredTag": PREFERRED_ULTRALYTICS_TAG,
         "fallbackTag": FALLBACK_ULTRALYTICS_TAG,
         "currentModel": model_name,
         "modelPath": str(model_path.relative_to(store.BACKEND_DIR)) if model_path else None,
         "modelExists": model_path is not None,
-        "ready": installed and model_path is not None,
+        "ready": pipeline_installed and model_path is not None,
+        "missingFixedPath": str(missing_fixed_path) if missing_fixed_path else None,
     }
 
 
@@ -160,22 +228,98 @@ def _tracking_class_config(names: Any) -> tuple[Optional[list[int]], dict[int, i
     return (sorted(set(class_ids)) or None, occlusion_classes)
 
 
-def _tracker_config_path() -> Path:
-    return store.BACKEND_DIR / "vendor" / "ultralytics" / "ultralytics" / "cfg" / "trackers" / "bytetrack.yaml"
-
-
 def preferred_inference_device() -> str:
     try:
         import torch
     except Exception:
         return "cpu"
 
-    mps_backend = getattr(torch.backends, "mps", None)
-    if mps_backend is not None and mps_backend.is_available():
-        return "mps"
     if torch.cuda.is_available():
-        return "0"
+        return "cuda"
     return "cpu"
+
+
+def _build_rtdetr_command(*, model_path: Path, video_path: Path, output_path: Path, counting_config_path: Path) -> list[str]:
+    return [
+        str(Path(sys.executable).resolve()),
+        str(_infer_script_path().resolve()),
+        "--config",
+        str(_infer_config_path().resolve()),
+        "-r",
+        str(model_path.resolve()),
+        "-v",
+        str(video_path.resolve()),
+        "-o",
+        str(output_path.resolve()),
+        "-a",
+        str(_infer_annotations_path().resolve()),
+        "--tracking",
+        "--counting-config",
+        str(counting_config_path.resolve()),
+        "--congestion",
+        "--road-length",
+        "0.0803",
+        "--lanes",
+        "2",
+        "-d",
+        preferred_inference_device(),
+        "--batch-size",
+        "32",
+    ]
+
+
+def _wait_for_process_with_cancellation(
+    process: subprocess.Popen[str],
+    *,
+    progress_callback: Optional[Callable[[dict[str, Any]], None]],
+) -> tuple[int, str, str]:
+    started_at = time.monotonic()
+    while True:
+        _run_cancel_check(progress_callback)
+        try:
+            stdout, stderr = process.communicate(timeout=0.2)
+            return process.returncode or 0, stdout or "", stderr or ""
+        except subprocess.TimeoutExpired:
+            elapsed_seconds = time.monotonic() - started_at
+            if elapsed_seconds > INFERENCE_MAX_RUNTIME_SECONDS:
+                _terminate_process(process)
+                raise RuntimeError(
+                    "RT-DETR inference command timed out "
+                    f"after {INFERENCE_MAX_RUNTIME_SECONDS:.1f} seconds."
+                )
+            continue
+
+
+def _terminate_process(process: subprocess.Popen[str]) -> None:
+    if process.poll() is not None:
+        return
+
+    terminated_with_group_signal = False
+    if hasattr(os, "killpg") and hasattr(os, "getpgid"):
+        try:
+            os.killpg(os.getpgid(process.pid), signal.SIGTERM)
+            terminated_with_group_signal = True
+        except ProcessLookupError:
+            return
+        except OSError:
+            terminated_with_group_signal = False
+
+    if not terminated_with_group_signal:
+        process.terminate()
+
+    try:
+        process.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        if terminated_with_group_signal and hasattr(os, "killpg") and hasattr(os, "getpgid"):
+            try:
+                os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+            except ProcessLookupError:
+                return
+            except OSError:
+                process.kill()
+        else:
+            process.kill()
+        process.wait(timeout=5)
 
 
 def _scalar(value: Any, default: Any = None) -> Any:
@@ -195,6 +339,25 @@ def _find_processed_video(save_dir: Path, source_path: Path) -> Optional[Path]:
         if candidate.exists():
             return candidate
     return None
+
+
+def _resolve_processed_video_path(*, explicit_output_path: Path, save_dir: Path, source_path: Path) -> Path:
+    if explicit_output_path.exists():
+        return explicit_output_path
+
+    for suffix in VIDEO_SUFFIXES:
+        candidate = explicit_output_path.with_suffix(suffix)
+        if candidate.exists():
+            return candidate
+
+    fallback_path = _find_processed_video(save_dir, source_path)
+    if fallback_path is not None:
+        return fallback_path
+
+    raise RuntimeError(
+        "RT-DETR inference finished but no processed output video was found. "
+        f"Expected output near: {explicit_output_path}"
+    )
 
 
 def _parse_clock_time(value: str) -> Optional[datetime]:
@@ -228,6 +391,124 @@ def _read_video_metadata(video_path: Path) -> tuple[float, Optional[int]]:
         capture.release()
 
     return (fps if fps > 0 else 30.0, frame_count if frame_count > 0 else None)
+
+
+def _counts_csv_path(output_video_path: Path) -> Path:
+    return Path(f"{output_video_path.with_suffix('')}_counts.csv")
+
+
+def _parse_int(value: Any) -> Optional[int]:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        return int(text)
+    except (TypeError, ValueError):
+        return None
+
+
+def _counts_description(track_id: Optional[int], line_name: str, direction: str) -> str:
+    pedestrian_label = f"Pedestrian ID #{track_id}" if track_id is not None else "Pedestrian"
+    crossing_line = line_name or "counting line"
+    crossing_direction = direction or "unknown direction"
+    return f"{pedestrian_label} crossed {crossing_line} ({crossing_direction})"
+
+
+def _parse_counts_csv(
+    *,
+    output_video_path: Path,
+    video_record: Optional[dict[str, Any]],
+) -> tuple[int, list[dict[str, Any]], list[dict[str, Any]]]:
+    counts_path = _counts_csv_path(output_video_path)
+    if not counts_path.exists() or not counts_path.is_file():
+        return 0, [], []
+
+    try:
+        with counts_path.open("r", encoding="utf-8", newline="") as counts_file:
+            reader = csv.DictReader(counts_file)
+            rows = [dict(row) for row in reader if isinstance(row, dict)]
+    except (OSError, UnicodeDecodeError, csv.Error):
+        return 0, [], []
+
+    if not rows:
+        return 0, [], []
+
+    record = video_record or {}
+    default_timestamp = str(record.get("startTime") or "Unknown Time")
+    location = str(record.get("location") or "Unknown Location")
+    video_id = record.get("id")
+
+    events: list[dict[str, Any]] = []
+    all_track_ids: set[int] = set()
+    person_track_ids: set[int] = set()
+    saw_person_label = False
+    track_summaries: dict[int, dict[str, Any]] = {}
+
+    for index, row in enumerate(rows):
+        raw_track_id = row.get("track_id")
+        track_id = _parse_int(raw_track_id)
+        frame_number = _parse_int(row.get("frame_number"))
+        timestamp = str(row.get("timestamp") or "").strip() or default_timestamp
+        line_name = str(row.get("line_name") or "").strip()
+        direction = str(row.get("direction") or "").strip()
+        class_name = str(row.get("class_name") or "").strip().lower()
+        if class_name == "person":
+            saw_person_label = True
+
+        if track_id is not None:
+            all_track_ids.add(track_id)
+            if class_name == "person":
+                person_track_ids.add(track_id)
+
+            track_summary = track_summaries.get(track_id)
+            if track_summary is None:
+                track_summary = {
+                    "id": f"trk-{track_id}-{index:04d}",
+                    "videoId": video_id,
+                    "pedestrianId": track_id,
+                    "firstTimestamp": timestamp,
+                    "lastTimestamp": timestamp,
+                    "firstFrame": frame_number,
+                    "lastFrame": frame_number,
+                    "firstOffsetSeconds": None,
+                    "lastOffsetSeconds": None,
+                    "appearanceSummary": "Track reconstructed from counting events.",
+                    "thumbnailPath": None,
+                    "semanticCrops": [],
+                    "trajectorySamples": [],
+                }
+                track_summaries[track_id] = track_summary
+            else:
+                track_summary["lastTimestamp"] = timestamp
+                if frame_number is not None:
+                    first_frame = track_summary.get("firstFrame")
+                    last_frame = track_summary.get("lastFrame")
+                    if first_frame is None or frame_number < first_frame:
+                        track_summary["firstFrame"] = frame_number
+                    if last_frame is None or frame_number > last_frame:
+                        track_summary["lastFrame"] = frame_number
+
+        event_id_suffix = track_id if track_id is not None else "na"
+        events.append(
+            {
+                "id": f"evt-{event_id_suffix}-{index:04d}",
+                "type": "detection",
+                "location": location,
+                "timestamp": timestamp,
+                "description": _counts_description(track_id, line_name, direction),
+                "videoId": video_id,
+                "pedestrianId": track_id,
+                "frame": frame_number,
+                "offsetSeconds": None,
+                "occlusionClass": None,
+            }
+        )
+
+    pedestrian_count = len(person_track_ids) if saw_person_label else len(all_track_ids)
+    pedestrian_tracks = list(track_summaries.values())
+    return pedestrian_count, events, pedestrian_tracks
 
 
 def _box_xyxy(box: Any) -> Optional[tuple[int, int, int, int]]:
@@ -617,7 +898,10 @@ def run_video_inference(
 ) -> dict[str, Any]:
     status = ultralytics_status()
     if not status["installed"]:
-        raise RuntimeError("Ultralytics is not installed yet. Install the pinned custom copy before running inference.")
+        missing_path = status.get("missingFixedPath")
+        if missing_path:
+            raise RuntimeError(f"RT-DETR inference pipeline is not ready. Missing required path: {missing_path}")
+        raise RuntimeError("RT-DETR inference pipeline is not ready.")
     if not status["modelExists"]:
         raise RuntimeError("The active model file is missing from backend/storage/models.")
 
@@ -625,233 +909,91 @@ def run_video_inference(
     if model_path is None:
         raise RuntimeError("Could not resolve the active model path for inference.")
 
-    _prefer_vendored_ultralytics()
-    from ultralytics import YOLO
-
-    save_name = (video_record or {}).get("id") or video_path.stem
+    save_name = str((video_record or {}).get("id") or video_path.stem)
     save_dir = store.PROCESSED_VIDEOS_DIR / save_name
     save_dir.mkdir(parents=True, exist_ok=True)
-
-    model = YOLO(str(model_path))
-    classes, occlusion_classes = _tracking_class_config(getattr(model, "names", None))
-
-    track_kwargs = {
-        "source": str(video_path),
-        "stream": True,
-        "persist": True,
-        "save": True,
-        "device": preferred_inference_device(),
-        "project": str(store.PROCESSED_VIDEOS_DIR),
-        "name": save_name,
-        "exist_ok": True,
-        "verbose": False,
-    }
-    if classes is not None:
-        track_kwargs["classes"] = classes
-    tracker_config = _tracker_config_path()
-    if tracker_config.exists():
-        track_kwargs["tracker"] = str(tracker_config)
-    if fast_mode:
-        track_kwargs["imgsz"] = 512
-        track_kwargs["vid_stride"] = 2
-
-    location = (video_record or {}).get("location", "Unknown Location")
-    start_timestamp = (video_record or {}).get("timestamp") or (video_record or {}).get("startTime") or "Unknown Time"
-    video_id = (video_record or {}).get("id")
-    fps, total_frames = _read_video_metadata(video_path)
-
-    seen_track_ids: set[int] = set()
-    max_people_in_frame = 0
-    events: list[dict[str, Any]] = []
-    pedestrian_tracks: dict[int, dict[str, Any]] = {}
-    track_sample_indexes: dict[int, dict[int, int]] = {}
-    last_reported_percent = -1
+    output_video_path = save_dir / f"{video_path.stem}-processed.mp4"
+    counting_config_path = _infer_counting_config_path((video_record or {}).get("location"))
+    command = _build_rtdetr_command(
+        model_path=model_path,
+        video_path=video_path,
+        output_path=output_video_path,
+        counting_config_path=counting_config_path,
+    )
 
     _run_cancel_check(progress_callback)
-
     if progress_callback is not None:
-        progress_callback({"progressPercent": 0, "phase": "tracking", "message": "Initializing detection and tracking..."})
-
-    for frame_index, result in enumerate(model.track(**track_kwargs), start=1):
-        _run_cancel_check(progress_callback)
-        boxes = getattr(result, "boxes", None)
-        if boxes is None:
-            continue
-
-        frame_image = getattr(result, "orig_img", None)
-
-        frame_people = 0
-        for box in boxes:
-            _run_cancel_check(progress_callback)
-            frame_people += 1
-            track_id = None
-            if getattr(box, "is_track", False):
-                track_id = _scalar(getattr(box, "id", None))
-            if track_id is None:
-                continue
-
-            track_id = int(track_id)
-            box_class = _scalar(getattr(box, "cls", None))
-            occlusion_class = None if box_class is None else occlusion_classes.get(int(box_class))
-            offset_seconds = round(max(0.0, (frame_index - 1) / fps), 2)
-            timestamp = _format_event_timestamp(start_timestamp, offset_seconds)
-
-            track_summary = pedestrian_tracks.get(track_id)
-            if track_summary is None:
-                track_summary = {
-                    "id": uuid4().hex[:8],
-                    "videoId": video_id,
-                    "pedestrianId": track_id,
-                    "location": location,
-                    "firstTimestamp": timestamp,
-                    "lastTimestamp": timestamp,
-                    "bestTimestamp": timestamp,
-                    "firstFrame": frame_index,
-                    "lastFrame": frame_index,
-                    "bestFrame": frame_index,
-                    "firstOffsetSeconds": offset_seconds,
-                    "lastOffsetSeconds": offset_seconds,
-                    "bestOffsetSeconds": offset_seconds,
-                    "thumbnailPath": None,
-                    "appearanceHints": [],
-                    "appearanceSummary": "Representative pedestrian track with limited appearance detail.",
-                    "occlusionClass": occlusion_class,
-                    "bestArea": 0.0,
-                    "semanticCrops": [],
-                    "footPointNorm": None,
-                    "trajectorySamples": [],
-                }
-                pedestrian_tracks[track_id] = track_summary
-            else:
-                track_summary["lastTimestamp"] = timestamp
-                track_summary["lastFrame"] = frame_index
-                track_summary["lastOffsetSeconds"] = offset_seconds
-                if occlusion_class is not None:
-                    current_occlusion = track_summary.get("occlusionClass")
-                    if current_occlusion is None or int(occlusion_class) > int(current_occlusion):
-                        track_summary["occlusionClass"] = occlusion_class
-
-            bounds = _box_xyxy(box)
-            if bounds is not None and frame_image is not None:
-                foot_point_norm = _foot_point_norm(bounds, frame_image)
-                if foot_point_norm is not None:
-                    track_summary["footPointNorm"] = foot_point_norm
-                    sample_second = int(max(0.0, (frame_index - 1) / fps))
-                    sample_indexes = track_sample_indexes.setdefault(track_id, {})
-                    sample_index = sample_indexes.get(sample_second)
-                    if sample_index is None:
-                        trajectory_samples = track_summary.setdefault("trajectorySamples", [])
-                        sample_indexes[sample_second] = len(trajectory_samples)
-                        trajectory_samples.append([sample_second, foot_point_norm[0], foot_point_norm[1], occlusion_class])
-                    else:
-                        trajectory_sample = track_summary["trajectorySamples"][sample_index]
-                        trajectory_sample[1] = foot_point_norm[0]
-                        trajectory_sample[2] = foot_point_norm[1]
-                        existing_occlusion = trajectory_sample[3]
-                        if occlusion_class is not None and (
-                            existing_occlusion is None or int(occlusion_class) > int(existing_occlusion)
-                        ):
-                            trajectory_sample[3] = occlusion_class
-                crop, crop_area = _crop_frame(frame_image, bounds)
-                previous_best_area = float(track_summary.get("bestArea") or 0.0)
-                if crop is not None:
-                    _update_semantic_crops(
-                        track_summary,
-                        image=crop,
-                        save_dir=save_dir,
-                        pedestrian_id=track_id,
-                        frame_index=frame_index,
-                        timestamp=timestamp,
-                        offset_seconds=offset_seconds,
-                        is_new_best=crop_area > previous_best_area,
-                    )
-                if crop is not None and crop_area > previous_best_area:
-                    track_summary["bestArea"] = crop_area
-                    track_summary["bestFrame"] = frame_index
-                    track_summary["bestTimestamp"] = timestamp
-                    track_summary["bestOffsetSeconds"] = offset_seconds
-                    thumbnail_target = save_dir / "tracks" / f"track-{track_id}.jpg"
-                    thumbnail_path = _save_track_thumbnail(crop, thumbnail_target)
-                    if thumbnail_path:
-                        track_summary["thumbnailPath"] = thumbnail_path
-                    hints = _appearance_hints(crop)
-                    track_summary["appearanceHints"] = hints
-                    track_summary["appearanceSummary"] = _appearance_summary(hints, track_summary.get("occlusionClass"))
-
-            if track_id in seen_track_ids:
-                continue
-
-            seen_track_ids.add(track_id)
-            if len(events) < MAX_TRACK_EVENTS:
-                description = f"Pedestrian ID #{track_id} detected at frame {frame_index}"
-                if occlusion_class is not None:
-                    severity_labels = {0: "light", 1: "moderate", 2: "heavy"}
-                    description = f"{severity_labels[occlusion_class].title()} occlusion pedestrian ID #{track_id} detected at frame {frame_index}"
-                events.append(
-                    {
-                        "id": uuid4().hex[:8],
-                        "type": "detection",
-                        "location": location,
-                        "timestamp": _format_event_timestamp(start_timestamp, offset_seconds),
-                        "description": description,
-                        "videoId": video_id,
-                        "pedestrianId": track_id,
-                        "frame": frame_index,
-                        "offsetSeconds": offset_seconds,
-                        "occlusionClass": occlusion_class,
-                    }
-                )
-
-        max_people_in_frame = max(max_people_in_frame, frame_people)
-
-        if progress_callback is None:
-            continue
-
-        if total_frames is not None:
-            progress_percent = min(78, int(round((frame_index / total_frames) * 78)))
-            if progress_percent >= last_reported_percent + 5 or frame_index >= total_frames:
-                last_reported_percent = progress_percent
-                progress_callback(
-                    {
-                        "progressPercent": progress_percent,
-                        "phase": "tracking",
-                        "message": "Running detection and tracking...",
-                        "frameIndex": frame_index,
-                        "totalFrames": total_frames,
-                    }
-                )
-        elif frame_index == 1:
-            progress_callback({"progressPercent": None, "phase": "tracking", "message": "Running detection and tracking..."})
-
-    pedestrian_count = len(seen_track_ids) if seen_track_ids else max_people_in_frame
-    if pedestrian_count > 0 and not events:
-        events.append(
+        progress_callback(
             {
-                "id": uuid4().hex[:8],
-                "type": "detection",
-                "location": location,
-                "timestamp": start_timestamp,
-                "description": f"{pedestrian_count} pedestrians detected",
-                "videoId": video_id,
-                "pedestrianId": None,
-                "frame": None,
-                "offsetSeconds": None,
-                "occlusionClass": None,
+                "progressPercent": 0,
+                "phase": "tracking",
+                "message": "Starting RT-DETR detection and tracking pipeline...",
             }
         )
 
-    track_results = list(pedestrian_tracks.values())
-    _run_cancel_check(progress_callback)
-    _enrich_track_summaries_with_vision(track_results, progress_callback)
-    _run_cancel_check(progress_callback)
+    process: Optional[subprocess.Popen[str]] = None
+    try:
+        process = subprocess.Popen(
+            command,
+            cwd=str(_occlusion_repo_dir().resolve()),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            start_new_session=True,
+        )
 
-    if progress_callback is not None:
-        progress_callback({"progressPercent": 99, "phase": "finalizing", "message": "Finalizing processed video..."})
+        return_code, _stdout, stderr = _wait_for_process_with_cancellation(process, progress_callback=progress_callback)
 
-    processed_path = _backend_relative_path(_find_processed_video(save_dir, video_path))
+        if progress_callback is not None:
+            progress_callback(
+                {
+                    "progressPercent": 99,
+                    "phase": "finalizing",
+                    "message": "Finalizing processed video...",
+                }
+            )
+
+        if return_code != 0:
+            stderr_text = (stderr or "").strip()
+            raise RuntimeError(
+                "RT-DETR inference command failed"
+                + (f": {stderr_text}" if stderr_text else ".")
+            )
+    except InterruptedError:
+        if process is not None:
+            _terminate_process(process)
+        raise
+    except Exception:
+        if process is not None:
+            _terminate_process(process)
+        raise
+
+    _run_cancel_check(progress_callback)
+    resolved_output_video_path = _resolve_processed_video_path(
+        explicit_output_path=output_video_path,
+        save_dir=save_dir,
+        source_path=video_path,
+    )
+    if not resolved_output_video_path.exists():
+        raise RuntimeError(
+            "RT-DETR inference finished but the resolved processed output file does not exist: "
+            f"{resolved_output_video_path}"
+        )
+
+    processed_path = _backend_relative_path(resolved_output_video_path)
+    if not processed_path:
+        raise RuntimeError(
+            "RT-DETR inference finished but could not resolve processedPath for API response."
+        )
+
+    pedestrian_count, events, pedestrian_tracks = _parse_counts_csv(
+        output_video_path=output_video_path,
+        video_record=video_record,
+    )
+
     return {
         "pedestrianCount": pedestrian_count,
         "processedPath": processed_path,
         "events": events,
-        "pedestrianTracks": track_results,
+        "pedestrianTracks": pedestrian_tracks,
     }

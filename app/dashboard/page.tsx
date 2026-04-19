@@ -259,7 +259,7 @@ export default function DashboardPage() {
               <DialogHeader>
                 <DialogTitle className="text-foreground">Detection Model Settings</DialogTitle>
                 <DialogDescription className="text-muted-foreground">
-                  Upload a PyTorch model file (.pt) for pedestrian detection
+                  Upload a PyTorch model file (.pt or .pth) for pedestrian detection
                 </DialogDescription>
               </DialogHeader>
 
@@ -288,7 +288,7 @@ export default function DashboardPage() {
                   >
                     <input
                       type="file"
-                      accept=".pt"
+                      accept=".pt,.pth"
                       onChange={(e) => setModelFile(e.target.files?.[0] || null)}
                       className="hidden"
                       id="model-upload"
@@ -299,7 +299,7 @@ export default function DashboardPage() {
                         <p className="text-sm font-medium text-accent">{modelFile.name}</p>
                       ) : (
                         <>
-                          <p className="text-sm text-foreground">Click to upload .pt file</p>
+                          <p className="text-sm text-foreground">Click to upload .pt or .pth file</p>
                           <p className="mt-1 text-xs text-muted-foreground">PyTorch model weights</p>
                         </>
                       )}

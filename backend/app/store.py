@@ -956,42 +956,52 @@ def seed_state() -> dict[str, Any]:
         "model": {"currentModel": "yolov8n-bytetrack.pt", "uploadedAt": None},
         "locations": [
             {
-                "id": "edsa-sec-walk",
-                "name": "EDSA Sec Walk",
+                "id": "gate-2",
+                "name": "Gate 2",
                 "latitude": 14.6397,
                 "longitude": 121.0775,
-                "description": "Approximate Xavier Hall camera anchor along the EDSA security walkway.",
-                "address": "Ateneo de Manila University · Xavier Hall",
+                "description": "Approximate camera anchor for Gate 2 pedestrian flow.",
+                "address": "Ateneo de Manila University · Gate 2",
+                "roiCoordinates": None,
+                "walkableAreaM2": None,
+            },
+            {
+                "id": "gate-2-9",
+                "name": "Gate 2.9",
+                "latitude": 14.6390,
+                "longitude": 121.0781,
+                "description": "Approximate camera anchor for Gate 2.9 pedestrian flow.",
+                "address": "Ateneo de Manila University · Gate 2.9",
                 "roiCoordinates": deepcopy(DEFAULT_EDSA_SEC_WALK_ROI),
                 "walkableAreaM2": None,
             },
             {
-                "id": "kostka-walk",
-                "name": "Kostka Walk",
-                "latitude": 14.6390,
-                "longitude": 121.0781,
-                "description": "Approximate Kostka Hall pedestrian corridor camera anchor.",
-                "address": "Ateneo de Manila University · Kostka Hall",
-                "roiCoordinates": None,
-                "walkableAreaM2": None,
-            },
-            {
-                "id": "gate-1-walkway",
-                "name": "Gate 1 Walkway",
-                "latitude": 14.6418,
-                "longitude": 121.0758,
-                "description": "Approximate Gate 1 walkway camera anchor.",
-                "address": "Ateneo de Manila University · Gate 1",
-                "roiCoordinates": None,
-                "walkableAreaM2": None,
-            },
-            {
-                "id": "gate-3-walkway",
-                "name": "Gate 3 Walkway",
+                "id": "gate-3",
+                "name": "Gate 3",
                 "latitude": 14.6376,
                 "longitude": 121.0742,
-                "description": "Approximate Gate 3 walkway camera anchor.",
+                "description": "Approximate camera anchor for Gate 3 pedestrian flow.",
                 "address": "Ateneo de Manila University · Gate 3",
+                "roiCoordinates": None,
+                "walkableAreaM2": None,
+            },
+            {
+                "id": "gate-3-2",
+                "name": "Gate 3.2",
+                "latitude": 14.6384,
+                "longitude": 121.0750,
+                "description": "Approximate camera anchor for Gate 3.2 pedestrian flow.",
+                "address": "Ateneo de Manila University · Gate 3.2",
+                "roiCoordinates": None,
+                "walkableAreaM2": None,
+            },
+            {
+                "id": "gate-3-5",
+                "name": "Gate 3.5",
+                "latitude": 14.6380,
+                "longitude": 121.0746,
+                "description": "Approximate camera anchor for Gate 3.5 pedestrian flow.",
+                "address": "Ateneo de Manila University · Gate 3.5",
                 "roiCoordinates": None,
                 "walkableAreaM2": None,
             },
@@ -1038,7 +1048,7 @@ def load_state() -> dict[str, Any]:
         if "walkableAreaM2" not in location:
             location["walkableAreaM2"] = None
             changed = True
-        if location.get("id") == "edsa-sec-walk" and not location.get("roiCoordinates"):
+        if location.get("id") == "gate-2-9" and not location.get("roiCoordinates"):
             location["roiCoordinates"] = deepcopy(DEFAULT_EDSA_SEC_WALK_ROI)
             changed = True
 
