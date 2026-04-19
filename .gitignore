@@ -29,4 +29,6 @@ backend/storage/videos/processed/*
 !backend/storage/videos/processed/.gitkeep
 backend/storage/exports/*
 !backend/storage/exports/.gitkeep
+.python-version
+__pycache__/
 
