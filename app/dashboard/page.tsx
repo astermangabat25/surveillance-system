@@ -29,6 +29,7 @@ import {
   downloadDashboardReport,
   getAISynthesis,
   getCurrentModel,
+  getDashboardLOS,
   getDashboardOcclusion,
   getDashboardOcclusionTrends,
   getDashboardSummary,
@@ -37,26 +38,51 @@ import {
   uploadModel,
   type AISynthesisResponse,
   type DashboardSummary,
+  type LocationRecord,
   type ModelInfo,
   type PTSIMapResponse,
   type PTSITrendResponse,
   type TrafficResponse,
 } from "@/lib/api"
 
+const TIME_RANGE_OPTIONS = [
+  { value: "12h", label: "12 hours" },
+  { value: "6h", label: "6 hours" },
+  { value: "4h", label: "4 hours" },
+  { value: "3h", label: "3 hours" },
+  { value: "2h", label: "2 hours" },
+  { value: "1h", label: "1 hour" },
+  { value: "30m", label: "30 minutes" },
+] as const
+
+const START_TIME_OPTIONS = Array.from({ length: 48 }, (_, index) => {
+  const totalMinutes = index * 30
+  const hours = String(Math.floor(totalMinutes / 60)).padStart(2, "0")
+  const minutes = String(totalMinutes % 60).padStart(2, "0")
+  const value = `${hours}:${minutes}`
+  return { value, label: value }
+})
+
 export default function DashboardPage() {
   const { settledUploadsVersion } = useUploadQueue()
   const [selectedDate, setSelectedDate] = useState("2026-03-15")
-  const [timeRange, setTimeRange] = useState("whole-day")
+  const [timeRange, setTimeRange] = useState("12h")
+  const [startTime, setStartTime] = useState("00:00")
   const [hourFilter, setHourFilter] = useState("all")
   const [focusTime, setFocusTime] = useState<string | undefined>(undefined)
   const [zoomLevel, setZoomLevel] = useState(0)
+  const [vehicleChartType, setVehicleChartType] = useState<"line" | "bar">("line")
+  const [inOutChartType, setInOutChartType] = useState<"line" | "bar">("line")
   const [modelDialogOpen, setModelDialogOpen] = useState(false)
   const [modelFile, setModelFile] = useState<File | null>(null)
   const [summary, setSummary] = useState<DashboardSummary | null>(null)
   const [traffic, setTraffic] = useState<TrafficResponse | null>(null)
+  const [losTraffic, setLosTraffic] = useState<TrafficResponse | null>(null)
   const [occlusionTrends, setOcclusionTrends] = useState<PTSITrendResponse | null>(null)
   const [occlusion, setOcclusion] = useState<PTSIMapResponse | null>(null)
   const [synthesis, setSynthesis] = useState<AISynthesisResponse | null>(null)
+  const [locations, setLocations] = useState<LocationRecord[]>([])
+  const [selectedLocationId, setSelectedLocationId] = useState<string>("")
   const [footageDates, setFootageDates] = useState<string[]>([])
   const [modelInfo, setModelInfo] = useState<ModelInfo | null>(null)
   const [dashboardLoading, setDashboardLoading] = useState(true)
@@ -70,16 +96,18 @@ export default function DashboardPage() {
   const loadDashboard = useCallback(async () => {
     setDashboardLoading(true)
     try {
-      const [summaryResponse, trafficResponse, occlusionTrendsResponse, occlusionResponse, synthesisResponse] = await Promise.all([
+      const [summaryResponse, trafficResponse, losTrafficResponse, occlusionTrendsResponse, occlusionResponse, synthesisResponse] = await Promise.all([
         getDashboardSummary(selectedDate || undefined),
-        getDashboardTraffic(selectedDate || undefined, timeRange, focusTime, zoomLevel),
-        getDashboardOcclusionTrends(selectedDate || undefined, timeRange, focusTime, zoomLevel),
-        getDashboardOcclusion(selectedDate || undefined, timeRange),
-        getAISynthesis(selectedDate, timeRange),
+        getDashboardTraffic(selectedDate || undefined, timeRange, focusTime, zoomLevel, startTime),
+        getDashboardLOS(selectedDate || undefined, timeRange, focusTime, zoomLevel, selectedLocationId || undefined, startTime),
+        getDashboardOcclusionTrends(selectedDate || undefined, timeRange, focusTime, zoomLevel, startTime),
+        getDashboardOcclusion(selectedDate || undefined, timeRange, startTime),
+        getAISynthesis(selectedDate, timeRange, startTime),
       ])
 
       setSummary(summaryResponse)
       setTraffic(trafficResponse)
+      setLosTraffic(losTrafficResponse)
       setOcclusionTrends(occlusionTrendsResponse)
       setOcclusion(occlusionResponse)
       setSynthesis(synthesisResponse)
@@ -87,6 +115,7 @@ export default function DashboardPage() {
     } catch (error) {
       setSummary(null)
       setTraffic(null)
+      setLosTraffic(null)
       setOcclusionTrends(null)
       setOcclusion(null)
       setSynthesis(null)
@@ -94,7 +123,7 @@ export default function DashboardPage() {
     } finally {
       setDashboardLoading(false)
     }
-  }, [focusTime, selectedDate, timeRange, zoomLevel])
+  }, [focusTime, selectedDate, selectedLocationId, startTime, timeRange, zoomLevel])
 
   const loadModelInfo = useCallback(async () => {
     setModelLoading(true)
@@ -112,11 +141,18 @@ export default function DashboardPage() {
   const loadFootageDates = useCallback(async () => {
     try {
       const response = await getLocations()
+      setLocations(response)
+      if (!selectedLocationId && response.length > 0) {
+        setSelectedLocationId(response[0].id)
+      }
+      if (selectedLocationId && !response.some((location) => location.id === selectedLocationId)) {
+        setSelectedLocationId(response[0]?.id ?? "")
+      }
       setFootageDates(Array.from(new Set(response.flatMap((location) => location.videos.map((video) => video.date)))).sort())
     } catch {
       // Leave existing date highlights untouched if this auxiliary request fails.
     }
-  }, [])
+  }, [selectedLocationId])
 
   useEffect(() => {
     void loadDashboard()
@@ -169,7 +205,7 @@ export default function DashboardPage() {
     setActionError(null)
 
     try {
-      const { blob, filename } = await downloadDashboardReport(selectedDate, timeRange)
+      const { blob, filename } = await downloadDashboardReport(selectedDate, timeRange, startTime)
       const downloadUrl = window.URL.createObjectURL(blob)
       const link = document.createElement("a")
       link.href = downloadUrl
@@ -201,8 +237,15 @@ export default function DashboardPage() {
     setZoomLevel(0)
   }
 
+  const handleStartTimeChange = (value: string) => {
+    setStartTime(value)
+    setFocusTime(undefined)
+    setZoomLevel(0)
+  }
+
   const handleAnalyticsZoom = (time: string) => {
-    if (!(traffic?.canZoomIn ?? occlusionTrends?.canZoomIn ?? false)) {
+    const canZoomInAnyChart = Boolean(traffic?.canZoomIn) || Boolean(losTraffic?.canZoomIn) || Boolean(occlusionTrends?.canZoomIn)
+    if (!canZoomInAnyChart) {
       return
     }
 
@@ -237,14 +280,37 @@ export default function DashboardPage() {
               <SelectValue placeholder="Select time range" />
             </SelectTrigger>
             <SelectContent className="rounded-xl border-border bg-popover">
-              <SelectItem value="whole-day" className="rounded-lg text-foreground">Whole Day</SelectItem>
-              <SelectItem value="last-1h" className="rounded-lg text-foreground">Last 1 Hour</SelectItem>
-              <SelectItem value="last-3h" className="rounded-lg text-foreground">Last 3 Hours</SelectItem>
-              <SelectItem value="last-6h" className="rounded-lg text-foreground">Last 6 Hours</SelectItem>
-              <SelectItem value="last-12h" className="rounded-lg text-foreground">Last 12 Hours</SelectItem>
-              <SelectItem value="morning" className="rounded-lg text-foreground">Morning (6AM-12PM)</SelectItem>
-              <SelectItem value="afternoon" className="rounded-lg text-foreground">Afternoon (12PM-6PM)</SelectItem>
-              <SelectItem value="evening" className="rounded-lg text-foreground">Evening (6PM-12AM)</SelectItem>
+              {TIME_RANGE_OPTIONS.map((option) => (
+                <SelectItem key={option.value} value={option.value} className="rounded-lg text-foreground">
+                  {option.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+
+          <Select value={startTime} onValueChange={handleStartTimeChange}>
+            <SelectTrigger className="w-36 rounded-2xl border-border bg-secondary text-foreground">
+              <SelectValue placeholder="Start time" />
+            </SelectTrigger>
+            <SelectContent className="max-h-80 rounded-xl border-border bg-popover">
+              {START_TIME_OPTIONS.map((option) => (
+                <SelectItem key={option.value} value={option.value} className="rounded-lg text-foreground">
+                  {option.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+
+          <Select value={selectedLocationId} onValueChange={setSelectedLocationId}>
+            <SelectTrigger className="w-44 rounded-2xl border-border bg-secondary text-foreground">
+              <SelectValue placeholder="Select location" />
+            </SelectTrigger>
+            <SelectContent className="rounded-xl border-border bg-popover">
+              {locations.map((location) => (
+                <SelectItem key={location.id} value={location.id} className="rounded-lg text-foreground">
+                  {location.name}
+                </SelectItem>
+              ))}
             </SelectContent>
           </Select>
 
@@ -364,13 +430,13 @@ export default function DashboardPage() {
         <div className="grid grid-cols-1 gap-6 xl:grid-cols-[65%_35%]">
           <div className="space-y-6">
             <PedestrianChart
-              title="Estimated Unique Tracked Pedestrians (Per location)"
-              description="Estimated cumulative unique tracked pedestrian count for each location over the selected timeline."
+              title="Vehicle Count"
+              description="Estimated cumulative vehicle count for each location over the selected timeline."
               timeRange={timeRange}
               selectedDate={selectedDate}
               data={traffic?.series ?? []}
               metricKey="cumulativeUniquePedestrians"
-              metricLabel="Unique Pedestrians"
+              metricLabel="Vehicle Count"
               seriesColor="#22C55E"
               locationTotals={traffic?.locationTotals ?? []}
               bucketMinutes={traffic?.bucketMinutes ?? 60}
@@ -382,22 +448,24 @@ export default function DashboardPage() {
               loading={dashboardLoading}
               onTimeSelect={handleAnalyticsZoom}
               onResetZoom={handleResetZoom}
+              chartType={vehicleChartType}
+              onChartTypeChange={setVehicleChartType}
             />
             <PedestrianChart
-              title="Average Visible Pedestrians"
-              description="Average number of pedestrians visible within each bucket, useful for spotting crowding changes."
+              title="LOS"
+              description="Level of Service trend for the selected location across the chosen time window."
               timeRange={timeRange}
               selectedDate={selectedDate}
-              data={traffic?.series ?? []}
-              metricKey="averageVisiblePedestrians"
-              metricLabel="Average Visible"
+              data={losTraffic?.series ?? []}
+              metricKey="los"
+              metricLabel="LOS"
               seriesColor="#06B6D4"
-              bucketMinutes={traffic?.bucketMinutes ?? 60}
-              zoomLevel={traffic?.zoomLevel ?? 0}
-              canZoomIn={traffic?.canZoomIn ?? false}
-              focusTime={traffic?.focusTime}
-              windowStart={traffic?.windowStart}
-              windowEnd={traffic?.windowEnd}
+              bucketMinutes={losTraffic?.bucketMinutes ?? 60}
+              zoomLevel={losTraffic?.zoomLevel ?? 0}
+              canZoomIn={losTraffic?.canZoomIn ?? false}
+              focusTime={losTraffic?.focusTime}
+              windowStart={losTraffic?.windowStart}
+              windowEnd={losTraffic?.windowEnd}
               loading={dashboardLoading}
               onTimeSelect={handleAnalyticsZoom}
               onResetZoom={handleResetZoom}
@@ -415,6 +483,8 @@ export default function DashboardPage() {
               loading={dashboardLoading}
               onTimeSelect={handleAnalyticsZoom}
               onResetZoom={handleResetZoom}
+              chartType={inOutChartType}
+              onChartTypeChange={setInOutChartType}
             />
           </div>
           <OcclusionMap hourFilter={hourFilter} onHourFilterChange={setHourFilter} data={occlusion} loading={dashboardLoading} />

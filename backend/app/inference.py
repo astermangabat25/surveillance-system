@@ -153,7 +153,6 @@ def ultralytics_status() -> dict[str, Any]:
         repo_dir,
         infer_script,
         _infer_config_path(),
-        _infer_annotations_path(),
         _infer_counting_config_path(),
     ]
     missing_fixed_path = _first_missing_path(fixed_required_paths)
@@ -240,7 +239,7 @@ def preferred_inference_device() -> str:
 
 
 def _build_rtdetr_command(*, model_path: Path, video_path: Path, output_path: Path, counting_config_path: Path) -> list[str]:
-    return [
+    command = [
         str(Path(sys.executable).resolve()),
         str(_infer_script_path().resolve()),
         "--config",
@@ -251,8 +250,6 @@ def _build_rtdetr_command(*, model_path: Path, video_path: Path, output_path: Pa
         str(video_path.resolve()),
         "-o",
         str(output_path.resolve()),
-        "-a",
-        str(_infer_annotations_path().resolve()),
         "--tracking",
         "--counting-config",
         str(counting_config_path.resolve()),
@@ -266,6 +263,12 @@ def _build_rtdetr_command(*, model_path: Path, video_path: Path, output_path: Pa
         "--batch-size",
         "32",
     ]
+
+    annotations_path = _infer_annotations_path()
+    if annotations_path.exists():
+        command.extend(["-a", str(annotations_path.resolve())])
+
+    return command
 
 
 def _wait_for_process_with_cancellation(

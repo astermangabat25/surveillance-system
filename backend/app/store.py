@@ -958,8 +958,8 @@ def seed_state() -> dict[str, Any]:
             {
                 "id": "gate-2",
                 "name": "Gate 2",
-                "latitude": 14.6397,
-                "longitude": 121.0775,
+                "latitude": 14.6358,
+                "longitude": 121.07469,
                 "description": "Approximate camera anchor for Gate 2 pedestrian flow.",
                 "address": "Ateneo de Manila University · Gate 2",
                 "roiCoordinates": None,
@@ -968,8 +968,8 @@ def seed_state() -> dict[str, Any]:
             {
                 "id": "gate-2-9",
                 "name": "Gate 2.9",
-                "latitude": 14.6390,
-                "longitude": 121.0781,
+                "latitude": 14.63667,
+                "longitude": 121.07472,
                 "description": "Approximate camera anchor for Gate 2.9 pedestrian flow.",
                 "address": "Ateneo de Manila University · Gate 2.9",
                 "roiCoordinates": deepcopy(DEFAULT_EDSA_SEC_WALK_ROI),
@@ -978,8 +978,8 @@ def seed_state() -> dict[str, Any]:
             {
                 "id": "gate-3",
                 "name": "Gate 3",
-                "latitude": 14.6376,
-                "longitude": 121.0742,
+                "latitude": 14.64028,
+                "longitude": 121.07472,
                 "description": "Approximate camera anchor for Gate 3 pedestrian flow.",
                 "address": "Ateneo de Manila University · Gate 3",
                 "roiCoordinates": None,
@@ -988,8 +988,8 @@ def seed_state() -> dict[str, Any]:
             {
                 "id": "gate-3-2",
                 "name": "Gate 3.2",
-                "latitude": 14.6384,
-                "longitude": 121.0750,
+                "latitude": 14.64055,
+                "longitude": 121.07475,
                 "description": "Approximate camera anchor for Gate 3.2 pedestrian flow.",
                 "address": "Ateneo de Manila University · Gate 3.2",
                 "roiCoordinates": None,
@@ -998,8 +998,8 @@ def seed_state() -> dict[str, Any]:
             {
                 "id": "gate-3-5",
                 "name": "Gate 3.5",
-                "latitude": 14.6380,
-                "longitude": 121.0746,
+                "latitude": 14.6409,
+                "longitude": 121.0748,
                 "description": "Approximate camera anchor for Gate 3.5 pedestrian flow.",
                 "address": "Ateneo de Manila University · Gate 3.5",
                 "roiCoordinates": None,
@@ -1393,6 +1393,13 @@ def set_model(filename: str) -> dict[str, Any]:
 
 def format_time_range_label(time_range: str) -> str:
     labels = {
+        "12h": "12 hours",
+        "6h": "6 hours",
+        "4h": "4 hours",
+        "3h": "3 hours",
+        "2h": "2 hours",
+        "1h": "1 hour",
+        "30m": "30 minutes",
         "whole-day": "Whole Day",
         "last-1h": "Last 1 Hour",
         "last-3h": "Last 3 Hours",
@@ -1815,9 +1822,29 @@ def _resolve_root_window(
     date_value: str,
     time_range: str,
     observation_times: list[datetime],
+    start_time: Optional[str] = None,
 ) -> tuple[datetime, datetime, int]:
     day_start = datetime.strptime(date_value, "%Y-%m-%d")
     day_end = day_start + timedelta(days=1)
+
+    duration_by_time_range = {
+        "12h": 12 * 60,
+        "6h": 6 * 60,
+        "4h": 4 * 60,
+        "3h": 3 * 60,
+        "2h": 2 * 60,
+        "1h": 1 * 60,
+        "30m": 30,
+    }
+    if time_range in duration_by_time_range:
+        parsed_start = _combine_date_and_time(date_value, start_time)
+        start = parsed_start or day_start
+        start = min(max(start, day_start), day_end)
+        duration_minutes = duration_by_time_range[time_range]
+        window_end = min(day_end, start + timedelta(minutes=duration_minutes))
+        window_minutes = max(int((window_end - start).total_seconds() // 60), 1)
+        step_minutes = max(1, math.ceil(window_minutes / 6))
+        return start, window_end, step_minutes
 
     if time_range in {"whole-day", "morning", "afternoon", "evening"}:
         hour_ranges = {
@@ -1877,11 +1904,12 @@ def _build_bucket_plan(
     observation_times: list[datetime],
     focus_time: Optional[str] = None,
     zoom_level: int = 0,
+    start_time: Optional[str] = None,
 ) -> tuple[list[tuple[str, datetime]], timedelta, dict[str, Any]]:
     day_start = datetime.strptime(date_value, "%Y-%m-%d")
     day_end = day_start + timedelta(days=1)
 
-    root_window_start, root_window_end, root_bucket_minutes = _resolve_root_window(date_value, time_range, observation_times)
+    root_window_start, root_window_end, root_bucket_minutes = _resolve_root_window(date_value, time_range, observation_times, start_time)
     requested_zoom_level = max(zoom_level, 0)
     if focus_time and requested_zoom_level == 0:
         requested_zoom_level = 1
@@ -2078,6 +2106,172 @@ def _location_unique_totals(
 
     totals = sorted(totals_by_location.items(), key=lambda item: item[1], reverse=True)
     return totals
+
+
+IN_GATE_LOCATION_IDS = {"gate-2", "gate-3"}
+OUT_GATE_LOCATION_IDS = {"gate-2-9", "gate-3-2", "gate-3-5"}
+
+
+def _normalize_gate_name(value: str) -> str:
+    return re.sub(r"[^a-z0-9.]", "", str(value or "").strip().lower())
+
+
+def _gate_flow_group_from_location_id(location_id: str) -> Optional[str]:
+    normalized_id = str(location_id or "").strip().casefold()
+    if normalized_id in IN_GATE_LOCATION_IDS:
+        return "In"
+    if normalized_id in OUT_GATE_LOCATION_IDS:
+        return "Out"
+    return None
+
+
+def _gate_flow_group_from_location_name(location_name: str) -> Optional[str]:
+    normalized_name = _normalize_gate_name(location_name)
+    if normalized_name in {"gate2", "gate3"}:
+        return "In"
+    if normalized_name in {"gate2.9", "gate3.2", "gate3.5"}:
+        return "Out"
+    return None
+
+
+def _track_video_id(track_key: str) -> Optional[str]:
+    video_id, _separator, _suffix = str(track_key or "").partition(":")
+    normalized_video_id = video_id.strip()
+    return normalized_video_id or None
+
+
+def _in_and_out_series_from_first_seen(
+    buckets: list[tuple[str, datetime]],
+    bucket_span: timedelta,
+    first_seen_by_track: dict[str, tuple[datetime, str]],
+    root_window_start: datetime,
+    videos_by_id: dict[str, dict[str, Any]],
+) -> list[dict[str, Union[int, str]]]:
+    if not buckets:
+        return []
+
+    series: list[dict[str, Union[int, str]]] = [
+        {
+            "id": bucket_start.isoformat(),
+            "time": label,
+            "In": 0,
+            "Out": 0,
+        }
+        for label, bucket_start in buckets
+    ]
+
+    first_bucket = buckets[0][1]
+    bucket_seconds = bucket_span.total_seconds()
+    final_boundary = buckets[-1][1] + bucket_span
+    baseline_counts = {"In": 0, "Out": 0}
+    bucket_counts = {
+        "In": [0 for _ in series],
+        "Out": [0 for _ in series],
+    }
+
+    for track_key, (observed_at, location_name) in first_seen_by_track.items():
+        video_id = _track_video_id(track_key)
+        location_id = str((videos_by_id.get(video_id or "") or {}).get("locationId") or "")
+        flow_group = _gate_flow_group_from_location_id(location_id)
+        if flow_group is None:
+            flow_group = _gate_flow_group_from_location_name(location_name)
+        if flow_group is None:
+            continue
+        if observed_at < root_window_start or observed_at >= final_boundary:
+            continue
+        if observed_at < first_bucket:
+            baseline_counts[flow_group] += 1
+            continue
+
+        bucket_index = _bucket_index(observed_at, first_bucket, bucket_seconds, len(series))
+        if bucket_index is None:
+            continue
+        bucket_counts[flow_group][bucket_index] += 1
+
+    running_in = baseline_counts["In"]
+    running_out = baseline_counts["Out"]
+    for index, point in enumerate(series):
+        running_in += bucket_counts["In"][index]
+        running_out += bucket_counts["Out"][index]
+        point["In"] = running_in
+        point["Out"] = running_out
+
+    return series
+
+
+def _los_rank_from_los(los: Optional[str]) -> float:
+    if los is None:
+        return 0.0
+    return float(PTSI_LOS_RANKS.get(los, 0) + 1)
+
+
+def _los_series_from_samples(
+    buckets: list[tuple[str, datetime]],
+    bucket_span: timedelta,
+    samples: list[dict[str, Any]],
+    location: dict[str, Any],
+) -> list[dict[str, Union[float, str]]]:
+    if not buckets:
+        return []
+
+    location_name = str(location.get("name") or "")
+    series: list[dict[str, Union[float, str]]] = [
+        {
+            "id": bucket_start.isoformat(),
+            "time": label,
+            "los": 0.0,
+        }
+        for label, bucket_start in buckets
+    ]
+
+    first_bucket = buckets[0][1]
+    bucket_seconds = bucket_span.total_seconds()
+    final_boundary = buckets[-1][1] + bucket_span
+
+    visible_totals = [0.0 for _ in series]
+    sample_counts = [0 for _ in series]
+    light_totals = [0.0 for _ in series]
+    moderate_totals = [0.0 for _ in series]
+    heavy_totals = [0.0 for _ in series]
+
+    for sample in samples:
+        if str(sample.get("location") or "") != location_name:
+            continue
+
+        observed_at = sample["observedAt"]
+        if observed_at < first_bucket or observed_at >= final_boundary:
+            continue
+        bucket_index = _bucket_index(observed_at, first_bucket, bucket_seconds, len(series))
+        if bucket_index is None:
+            continue
+
+        visible_count = float(sample.get("visibleCount") or 0)
+        class_counts = sample.get("classCounts") or {}
+        sample_counts[bucket_index] += 1
+        visible_totals[bucket_index] += visible_count
+        light_totals[bucket_index] += float(class_counts.get(0) or 0)
+        moderate_totals[bucket_index] += float(class_counts.get(1) or 0)
+        heavy_totals[bucket_index] += float(class_counts.get(2) or 0)
+
+    for index, point in enumerate(series):
+        if sample_counts[index] == 0:
+            point["los"] = 0.0
+            continue
+
+        average_visible = visible_totals[index] / sample_counts[index]
+        rounded_visible = max(1, int(round(average_visible)))
+        occlusion_value = 0.0
+        if visible_totals[index] > 0:
+            occlusion_value = (
+                (light_totals[index] * PTSI_OCCLUSION_WEIGHTS[0])
+                + (moderate_totals[index] * PTSI_OCCLUSION_WEIGHTS[1])
+                + (heavy_totals[index] * PTSI_OCCLUSION_WEIGHTS[2])
+            ) / (3.0 * visible_totals[index])
+
+        los = _ptsi_score_breakdown(rounded_visible, location, occlusion_value).get("los")
+        point["los"] = _los_rank_from_los(los)
+
+    return series
 
 
 def _dashboard_unique_pedestrian_rows(first_seen_by_track: dict[str, tuple[datetime, str]]) -> list[dict[str, Any]]:
@@ -2555,11 +2749,60 @@ def dashboard_summary(date: Optional[str] = None) -> dict[str, Any]:
     }
 
 
+def _windowed_dashboard_summary(date: str, time_range: str, start_time: Optional[str] = None) -> dict[str, Any]:
+    state, resolved_date, videos, events = _filtered_dashboard_records(date)
+    pedestrian_tracks = _filtered_pedestrian_tracks(state, videos)
+    samples, first_seen_by_track = _build_analytics_samples(videos, events, pedestrian_tracks)
+    videos_by_id = {str(video.get("id") or ""): video for video in videos}
+
+    observation_times = [sample["observedAt"] for sample in samples]
+    if not observation_times:
+        observation_times = [timestamp for timestamp in (_observation_time(video) for video in videos) if timestamp is not None]
+
+    buckets, bucket_span, _bucket_meta = _build_bucket_plan(resolved_date, time_range, observation_times, start_time=start_time)
+    if buckets:
+        window_start = buckets[0][1]
+        window_end = buckets[-1][1] + bucket_span
+    else:
+        window_start = datetime.strptime(resolved_date, "%Y-%m-%d")
+        window_end = window_start
+
+    total_unique_pedestrians = sum(1 for first_seen_at, _location in first_seen_by_track.values() if window_start <= first_seen_at < window_end)
+    total_heavy_occlusions = 0
+    for event in events:
+        if _event_occlusion_class(event) != 2:
+            continue
+
+        video = videos_by_id.get(str(event.get("videoId") or ""))
+        if video is None:
+            continue
+
+        event_time = _event_timestamp(event, video)
+        if event_time is None:
+            continue
+        if window_start <= event_time < window_end:
+            total_heavy_occlusions += 1
+
+    active_locations_in_window = {
+        str(video.get("locationId") or "")
+        for video in videos
+        if (observed_at := _observation_time(video)) is not None and window_start <= observed_at < window_end
+    }
+
+    return {
+        "totalUniquePedestrians": total_unique_pedestrians,
+        "averageFps": 29.7 if active_locations_in_window else 0.0,
+        "totalHeavyOcclusions": total_heavy_occlusions,
+        "monitoredLocations": len(active_locations_in_window),
+    }
+
+
 def dashboard_traffic(
     date: Optional[str] = None,
-    time_range: str = "whole-day",
+    time_range: str = "12h",
     focus_time: Optional[str] = None,
     zoom_level: int = 0,
+    start_time: Optional[str] = None,
 ) -> dict[str, Any]:
     state, resolved_date, videos, events = _filtered_dashboard_records(date)
     pedestrian_tracks = _filtered_pedestrian_tracks(state, videos)
@@ -2568,8 +2811,8 @@ def dashboard_traffic(
     if not observation_times:
         observation_times = [timestamp for timestamp in (_observation_time(video) for video in videos) if timestamp is not None]
 
-    root_window_start, _root_window_end, _root_bucket_minutes = _resolve_root_window(resolved_date, time_range, observation_times)
-    buckets, bucket_span, bucket_meta = _build_bucket_plan(resolved_date, time_range, observation_times, focus_time, zoom_level)
+    root_window_start, _root_window_end, _root_bucket_minutes = _resolve_root_window(resolved_date, time_range, observation_times, start_time)
+    buckets, bucket_span, bucket_meta = _build_bucket_plan(resolved_date, time_range, observation_times, focus_time, zoom_level, start_time)
     active_location_ids = _active_location_ids(videos)
     active_location_names = [location["name"] for location in state["locations"] if location["id"] in active_location_ids]
     series = _traffic_series_from_samples(
@@ -2605,26 +2848,78 @@ def dashboard_traffic(
 
 def dashboard_occlusion_trends(
     date: Optional[str] = None,
-    time_range: str = "whole-day",
+    time_range: str = "12h",
     focus_time: Optional[str] = None,
     zoom_level: int = 0,
+    start_time: Optional[str] = None,
 ) -> dict[str, Any]:
     state, resolved_date, videos, events = _filtered_dashboard_records(date)
     pedestrian_tracks = _filtered_pedestrian_tracks(state, videos)
-    samples, _first_seen_by_track = _build_analytics_samples(videos, events, pedestrian_tracks)
+    samples, first_seen_by_track = _build_analytics_samples(videos, events, pedestrian_tracks)
     observation_times = [sample["observedAt"] for sample in samples]
     if not observation_times:
         observation_times = [timestamp for timestamp in (_observation_time(video) for video in videos) if timestamp is not None]
 
-    buckets, bucket_span, bucket_meta = _build_bucket_plan(resolved_date, time_range, observation_times, focus_time, zoom_level)
+    root_window_start, _root_window_end, _root_bucket_minutes = _resolve_root_window(resolved_date, time_range, observation_times, start_time)
+    buckets, bucket_span, bucket_meta = _build_bucket_plan(resolved_date, time_range, observation_times, focus_time, zoom_level, start_time)
     if not buckets:
         return {"timeRange": time_range, "series": [], **bucket_meta}
 
-    series = _occlusion_series_from_samples(buckets, bucket_span, samples)
+    videos_by_id = {str(video.get("id") or ""): video for video in videos}
+    series = _in_and_out_series_from_first_seen(buckets, bucket_span, first_seen_by_track, root_window_start, videos_by_id)
     return {"timeRange": time_range, "series": series, **bucket_meta}
 
 
-def dashboard_occlusion(date: Optional[str] = None, time_range: str = "whole-day") -> dict[str, Any]:
+def dashboard_los(
+    date: Optional[str] = None,
+    time_range: str = "12h",
+    focus_time: Optional[str] = None,
+    zoom_level: int = 0,
+    location_id: Optional[str] = None,
+    start_time: Optional[str] = None,
+) -> dict[str, Any]:
+    state, resolved_date, videos, events = _filtered_dashboard_records(date)
+    selected_location_id = str(location_id or "").strip()
+    location = next((item for item in state["locations"] if item["id"] == selected_location_id), None)
+
+    if location is None:
+        return {
+            "timeRange": time_range,
+            "series": [],
+            "bucketMinutes": 60,
+            "zoomLevel": 0,
+            "canZoomIn": False,
+            "isDrilldown": False,
+            "focusTime": None,
+            "windowStart": None,
+            "windowEnd": None,
+            "locationTotals": [],
+        }
+
+    location_videos = [video for video in videos if video.get("locationId") == selected_location_id]
+    location_video_ids = {video["id"] for video in location_videos}
+    location_events = [event for event in events if event.get("videoId") in location_video_ids]
+    pedestrian_tracks = [track for track in _filtered_pedestrian_tracks(state, location_videos) if track.get("videoId") in location_video_ids]
+    samples, _first_seen_by_track = _build_analytics_samples(location_videos, location_events, pedestrian_tracks)
+
+    observation_times = [sample["observedAt"] for sample in samples]
+    if not observation_times:
+        observation_times = [timestamp for timestamp in (_observation_time(video) for video in location_videos) if timestamp is not None]
+
+    buckets, bucket_span, bucket_meta = _build_bucket_plan(resolved_date, time_range, observation_times, focus_time, zoom_level, start_time)
+    if not buckets:
+        return {"timeRange": time_range, "series": [], **bucket_meta, "locationTotals": []}
+
+    series = _los_series_from_samples(buckets, bucket_span, samples, location)
+    return {
+        "timeRange": time_range,
+        "series": series,
+        **bucket_meta,
+        "locationTotals": [],
+    }
+
+
+def dashboard_occlusion(date: Optional[str] = None, time_range: str = "12h", start_time: Optional[str] = None) -> dict[str, Any]:
     state, resolved_date, videos, _events = _filtered_dashboard_records(date)
     videos_by_id = {video["id"]: video for video in videos}
     locations_by_id = {location["id"]: location for location in state["locations"]}
@@ -2665,7 +2960,7 @@ def dashboard_occlusion(date: Optional[str] = None, time_range: str = "whole-day
     if not observation_times:
         observation_times = [timestamp for timestamp in (_observation_time(video) for video in videos) if timestamp is not None]
 
-    buckets, bucket_span, _ = _build_bucket_plan(resolved_date, time_range, observation_times)
+    buckets, bucket_span, _ = _build_bucket_plan(resolved_date, time_range, observation_times, start_time=start_time)
     window_start = buckets[0][1] if buckets else datetime.strptime(resolved_date, "%Y-%m-%d")
     window_end = (buckets[-1][1] + bucket_span) if buckets else (window_start + timedelta(days=1))
 
@@ -2895,9 +3190,9 @@ def dashboard_occlusion(date: Optional[str] = None, time_range: str = "whole-day
     }
 
 
-def ai_synthesis(date: str, time_range: str) -> dict[str, Any]:
-    summary = dashboard_summary(date)
-    traffic_response = dashboard_traffic(date, time_range)
+def ai_synthesis(date: str, time_range: str, start_time: Optional[str] = None) -> dict[str, Any]:
+    summary = _windowed_dashboard_summary(date, time_range, start_time)
+    traffic_response = dashboard_traffic(date, time_range, start_time=start_time)
     traffic_series = traffic_response["series"]
     location_totals = traffic_response.get("locationTotals", [])
     peak_point = None
@@ -2907,7 +3202,7 @@ def ai_synthesis(date: str, time_range: str) -> dict[str, Any]:
             key=lambda point: float(point.get("averageVisiblePedestrians", 0.0)),
         )
 
-    occlusion_response = dashboard_occlusion(date, time_range)
+    occlusion_response = dashboard_occlusion(date, time_range, start_time)
     hotspots = [location["name"] for location in occlusion_response["locations"] if location["state"] in {"moderate", "severe"}]
 
     if not traffic_series:
@@ -2964,17 +3259,17 @@ def ai_synthesis(date: str, time_range: str) -> dict[str, Any]:
     }
 
 
-def export_dashboard_report(date: str, time_range: str) -> Path:
+def export_dashboard_report(date: str, time_range: str, start_time: Optional[str] = None) -> Path:
     ensure_storage_layout()
 
     state, _, videos, events = _filtered_dashboard_records(date)
     pedestrian_tracks = _filtered_pedestrian_tracks(state, videos)
     _analytics_samples, first_seen_by_track = _build_analytics_samples(videos, events, pedestrian_tracks)
-    summary = dashboard_summary(date)
-    traffic_response = dashboard_traffic(date, time_range)
+    summary = _windowed_dashboard_summary(date, time_range, start_time)
+    traffic_response = dashboard_traffic(date, time_range, start_time=start_time)
     traffic = traffic_response["series"]
-    occlusion_response = dashboard_occlusion(date, time_range)
-    synthesis = ai_synthesis(date, time_range)
+    occlusion_response = dashboard_occlusion(date, time_range, start_time)
+    synthesis = ai_synthesis(date, time_range, start_time)
     model = get_model_info()
 
     location_totals = traffic_response.get("locationTotals", [])
