@@ -22,6 +22,10 @@ MAX_TRACK_EVENTS = 50
 TRACK_THUMBNAIL_MAX_EDGE = 224
 SEMANTIC_CROP_LABEL_ORDER = ("best", "early", "mid", "late")
 CLOCK_TIME_FORMATS = ("%H:%M", "%H:%M:%S", "%I:%M %p", "%I:%M:%S %p")
+INFERENCE_REQUIREMENTS_DIR = store.STORAGE_DIR / "inference_requirements"
+INFERENCE_CONFIGS_DIR = INFERENCE_REQUIREMENTS_DIR / "configs" / "rtdetr"
+INFERENCE_ANNOTATIONS_DIR = INFERENCE_REQUIREMENTS_DIR / "annotations"
+INFERENCE_COUNTING_DIR = INFERENCE_REQUIREMENTS_DIR / "counting"
 _DEFAULT_INFERENCE_MAX_RUNTIME_SECONDS = 1800.0
 try:
     INFERENCE_MAX_RUNTIME_SECONDS = max(
@@ -52,12 +56,64 @@ def _thesis_root_dir() -> Path:
     return store.BACKEND_DIR.parent.parent
 
 
+def _candidate_occlusion_repo_dirs() -> list[Path]:
+    candidates: list[Path] = []
+
+    configured_repo_dir = os.getenv("OCCLUSION_RTDETR_DIR", "").strip()
+    if configured_repo_dir:
+        candidates.append(Path(configured_repo_dir).expanduser())
+
+    candidates.append(_thesis_root_dir() / "Occlusion-Robust-RTDETR")
+    candidates.append(store.BACKEND_DIR.parent / "Occlusion-Robust-RTDETR")
+
+    # Also scan ancestor directories to support varied local folder layouts.
+    for ancestor in [store.BACKEND_DIR, *store.BACKEND_DIR.parents]:
+        candidates.append(ancestor / "Occlusion-Robust-RTDETR")
+
+    deduped: list[Path] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        normalized = str(candidate.resolve(strict=False))
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        deduped.append(candidate)
+    return deduped
+
+
+def _looks_like_occlusion_repo(candidate: Path) -> bool:
+    return (candidate / "tools" / "infer.py").exists()
+
+
 def _occlusion_repo_dir() -> Path:
-    thesis_layout_candidate = _thesis_root_dir() / "Occlusion-Robust-RTDETR"
-    sibling_layout_candidate = store.BACKEND_DIR.parent / "Occlusion-Robust-RTDETR"
-    if thesis_layout_candidate.exists() or not sibling_layout_candidate.exists():
-        return thesis_layout_candidate
-    return sibling_layout_candidate
+    candidates = _candidate_occlusion_repo_dirs()
+    for candidate in candidates:
+        if _looks_like_occlusion_repo(candidate):
+            return candidate
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return candidates[0]
+
+
+def occlusion_repo_dir() -> Path:
+    return _occlusion_repo_dir()
+
+
+def requirements_root_dir() -> Path:
+    return INFERENCE_REQUIREMENTS_DIR
+
+
+def requirements_config_dir() -> Path:
+    return INFERENCE_CONFIGS_DIR
+
+
+def requirements_annotations_dir() -> Path:
+    return INFERENCE_ANNOTATIONS_DIR
+
+
+def requirements_counting_dir() -> Path:
+    return INFERENCE_COUNTING_DIR
 
 
 def _infer_script_path() -> Path:
@@ -65,11 +121,57 @@ def _infer_script_path() -> Path:
 
 
 def _infer_config_path() -> Path:
-    return _occlusion_repo_dir() / "configs" / "rtdetr" / "rtdetr_r50_final.yml"
+    configured_path = str(os.getenv("RTDETR_INFER_CONFIG") or "").strip()
+    if configured_path:
+        configured_candidate = Path(configured_path).expanduser()
+        if not configured_candidate.is_absolute():
+            configured_candidate = (_occlusion_repo_dir() / configured_candidate).resolve(strict=False)
+        return configured_candidate
+
+    occlusion_repo = _occlusion_repo_dir()
+    preferred_candidates = [
+        INFERENCE_CONFIGS_DIR / "rtdetr_r50_final.yml",
+        INFERENCE_CONFIGS_DIR / "rtdetr_custom.yml",
+        INFERENCE_CONFIGS_DIR / "custom_rtdetr_r101vd_6x_coco.yml",
+        INFERENCE_CONFIGS_DIR / "rtdetr_r50vd_6x_coco.yml",
+        occlusion_repo / "configs" / "rtdetr" / "rtdetr_r50_final.yml",
+        occlusion_repo / "configs" / "rtdetr" / "rtdetr_custom.yml",
+        occlusion_repo / "configs" / "rtdetr" / "custom_rtdetr_r101vd_6x_coco.yml",
+        occlusion_repo / "configs" / "rtdetr" / "others" / "rtdetr_r50vd_6x_coco.yml",
+    ]
+
+    for candidate in preferred_candidates[:4]:
+        if candidate.exists():
+            return candidate
+
+    return preferred_candidates[0]
 
 
-def _infer_annotations_path() -> Path:
-    return _occlusion_repo_dir() / "configs" / "dataset" / "MergedAll" / "annotations" / "instances_train.json"
+def _infer_annotations_path() -> Optional[Path]:
+    configured_path = str(os.getenv("RTDETR_ANNOTATIONS_PATH") or "").strip()
+    if configured_path:
+        configured_candidate = Path(configured_path).expanduser()
+        if not configured_candidate.is_absolute():
+            configured_candidate = (_occlusion_repo_dir() / configured_candidate).resolve(strict=False)
+        return configured_candidate
+
+    local_candidate = INFERENCE_ANNOTATIONS_DIR / "instances_train.json"
+    if local_candidate.exists():
+        return local_candidate
+
+    for candidate in INFERENCE_ANNOTATIONS_DIR.glob("*.json"):
+        if candidate.is_file():
+            return candidate
+
+    default_candidate = _occlusion_repo_dir() / "configs" / "dataset" / "MergedAll" / "annotations" / "instances_train.json"
+    if default_candidate.exists():
+        return default_candidate
+
+    for candidate in _occlusion_repo_dir().glob("**/instances_train.json"):
+        if candidate.is_file():
+            return candidate
+
+    return None
 
 
 def _normalized_counting_location_suffix(location_name: Optional[str]) -> Optional[str]:
@@ -116,13 +218,12 @@ def _normalized_counting_location_suffix(location_name: Optional[str]) -> Option
 
 
 def _infer_counting_config_path(location_name: Optional[str] = None) -> Path:
-    occlusion_root = _occlusion_repo_dir()
-    fallback_path = occlusion_root / "counting_config_g2.9.json"
+    fallback_path = INFERENCE_COUNTING_DIR / "counting_config_g2.9.json"
     suffix = _normalized_counting_location_suffix(location_name)
     if not suffix:
         return fallback_path
 
-    configured_path = occlusion_root / f"counting_config_{suffix}.json"
+    configured_path = INFERENCE_COUNTING_DIR / f"counting_config_{suffix}.json"
     if configured_path.exists():
         return configured_path
 
@@ -133,13 +234,105 @@ def _first_missing_path(paths: list[Path]) -> Optional[Path]:
     return next((path for path in paths if not path.exists()), None)
 
 
-def resolve_model_path(model_name: Optional[str]) -> Optional[Path]:
-    if not model_name:
-        return None
+def _model_search_roots() -> list[Path]:
+    candidates = [
+        store.MODELS_DIR,
+        store.STORAGE_DIR,
+        _thesis_root_dir(),
+        store.BACKEND_DIR.parent,
+    ]
 
-    candidate = store.MODELS_DIR / Path(model_name).name
-    if candidate.exists():
-        return candidate
+    configured_model_dir = os.getenv("MODEL_SEARCH_DIR", "").strip()
+    if configured_model_dir:
+        candidates.insert(0, Path(configured_model_dir).expanduser())
+
+    deduped: list[Path] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        normalized = str(candidate.resolve(strict=False))
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        deduped.append(candidate)
+    return deduped
+
+
+def _find_models_by_name(filename: Optional[str] = None) -> list[Path]:
+    suffixes = {".pt", ".pth"}
+    ignored_dirs = {".git", ".next", "node_modules", "__pycache__", ".venv", "venv"}
+    target_name = Path(filename).name if filename else None
+    discovered: list[Path] = []
+    seen: set[str] = set()
+
+    for root in _model_search_roots():
+        if not root.exists():
+            continue
+
+        for walk_root, dirnames, filenames in os.walk(root):
+            dirnames[:] = [dirname for dirname in dirnames if dirname not in ignored_dirs]
+
+            if target_name:
+                if target_name not in filenames:
+                    continue
+                candidate = Path(walk_root) / target_name
+                if candidate.suffix.lower() not in suffixes:
+                    continue
+                normalized_candidate = str(candidate.resolve(strict=False))
+                if normalized_candidate in seen:
+                    continue
+                seen.add(normalized_candidate)
+                discovered.append(candidate)
+                continue
+
+            for name in filenames:
+                if Path(name).suffix.lower() not in suffixes:
+                    continue
+                candidate = Path(walk_root) / name
+                normalized_candidate = str(candidate.resolve(strict=False))
+                if normalized_candidate in seen:
+                    continue
+                seen.add(normalized_candidate)
+                discovered.append(candidate)
+
+    def _mtime(path: Path) -> float:
+        try:
+            return path.stat().st_mtime
+        except OSError:
+            return 0.0
+
+    discovered.sort(key=_mtime, reverse=True)
+    return discovered
+
+
+def resolve_model_path(model_name: Optional[str]) -> Optional[Path]:
+    allowed_suffixes = {".pt", ".pth"}
+    model_value = str(model_name or "").strip()
+    if model_value:
+        explicit_path = Path(model_value).expanduser()
+        if explicit_path.is_absolute() and explicit_path.exists() and explicit_path.is_file() and explicit_path.suffix.lower() in allowed_suffixes:
+            return explicit_path
+
+        for base_dir in (store.BACKEND_DIR, store.BACKEND_DIR.parent, _thesis_root_dir()):
+            candidate = (base_dir / explicit_path).resolve(strict=False)
+            if candidate.exists() and candidate.is_file() and candidate.suffix.lower() in allowed_suffixes:
+                return candidate
+
+        default_models_dir_candidate = store.MODELS_DIR / Path(model_value).name
+        if (
+            default_models_dir_candidate.exists()
+            and default_models_dir_candidate.is_file()
+            and default_models_dir_candidate.suffix.lower() in allowed_suffixes
+        ):
+            return default_models_dir_candidate
+
+        discovered_named_models = _find_models_by_name(model_value)
+        if discovered_named_models:
+            return discovered_named_models[0]
+
+    discovered_models = _find_models_by_name()
+    if discovered_models:
+        return discovered_models[0]
+
     return None
 
 
@@ -153,9 +346,11 @@ def ultralytics_status() -> dict[str, Any]:
         repo_dir,
         infer_script,
         _infer_config_path(),
-        _infer_annotations_path(),
         _infer_counting_config_path(),
     ]
+    annotations_path = _infer_annotations_path()
+    if annotations_path is not None:
+        fixed_required_paths.append(annotations_path)
     missing_fixed_path = _first_missing_path(fixed_required_paths)
     pipeline_installed = missing_fixed_path is None
     version = None
@@ -169,26 +364,40 @@ def ultralytics_status() -> dict[str, Any]:
     return {
         "installed": pipeline_installed,
         "version": version,
-        "packagePath": str(infer_script),
-        "vendoredPath": _backend_relative_path(repo_dir),
+        "packagePath": _project_relative_path(infer_script),
+        "vendoredPath": _project_relative_path(repo_dir),
         "usingVendoredCopy": pipeline_installed,
         "preferredTag": PREFERRED_ULTRALYTICS_TAG,
         "fallbackTag": FALLBACK_ULTRALYTICS_TAG,
         "currentModel": model_name,
-        "modelPath": str(model_path.relative_to(store.BACKEND_DIR)) if model_path else None,
+        "modelPath": _project_relative_path(model_path),
         "modelExists": model_path is not None,
         "ready": pipeline_installed and model_path is not None,
-        "missingFixedPath": str(missing_fixed_path) if missing_fixed_path else None,
+        "missingFixedPath": _project_relative_path(missing_fixed_path),
     }
 
 
-def _backend_relative_path(path: Optional[Path]) -> Optional[str]:
+def _project_relative_path(path: Optional[Path]) -> Optional[str]:
     if path is None:
         return None
+
+    resolved_path = path.resolve(strict=False)
+    relative_candidates: list[str] = []
+
+    for root in (store.BACKEND_DIR.parent, _thesis_root_dir()):
+        try:
+            relative_candidates.append(str(resolved_path.relative_to(root.resolve(strict=False))))
+        except ValueError:
+            continue
+
+    if relative_candidates:
+        return min(relative_candidates, key=len)
+
     try:
-        return str(path.relative_to(store.BACKEND_DIR))
+        # Keep path relative even when outside known roots.
+        return os.path.relpath(str(resolved_path), start=str(store.BACKEND_DIR.parent.resolve(strict=False)))
     except ValueError:
-        return str(path)
+        return str(path.name)
 
 
 def _normalize_names(names: Any) -> dict[int, str]:
@@ -239,8 +448,15 @@ def preferred_inference_device() -> str:
     return "cpu"
 
 
-def _build_rtdetr_command(*, model_path: Path, video_path: Path, output_path: Path, counting_config_path: Path) -> list[str]:
-    return [
+def _build_rtdetr_command(
+    *,
+    model_path: Path,
+    video_path: Path,
+    output_path: Path,
+    counting_config_path: Path,
+    annotations_path: Optional[Path],
+) -> list[str]:
+    command = [
         str(Path(sys.executable).resolve()),
         str(_infer_script_path().resolve()),
         "--config",
@@ -251,8 +467,6 @@ def _build_rtdetr_command(*, model_path: Path, video_path: Path, output_path: Pa
         str(video_path.resolve()),
         "-o",
         str(output_path.resolve()),
-        "-a",
-        str(_infer_annotations_path().resolve()),
         "--tracking",
         "--counting-config",
         str(counting_config_path.resolve()),
@@ -266,6 +480,11 @@ def _build_rtdetr_command(*, model_path: Path, video_path: Path, output_path: Pa
         "--batch-size",
         "32",
     ]
+
+    if annotations_path is not None and annotations_path.exists():
+        command.extend(["-a", str(annotations_path.resolve())])
+
+    return command
 
 
 def _wait_for_process_with_cancellation(
@@ -581,7 +800,7 @@ def _save_track_thumbnail(image: Any, target: Path) -> Optional[str]:
     success = cv2.imwrite(str(target), thumbnail, [int(cv2.IMWRITE_JPEG_QUALITY), 72])
     if not success:
         return None
-    return _backend_relative_path(target)
+    return _project_relative_path(target)
 
 
 def _semantic_crop_sort_key(crop: dict[str, Any]) -> tuple[int, float]:
@@ -914,11 +1133,13 @@ def run_video_inference(
     save_dir.mkdir(parents=True, exist_ok=True)
     output_video_path = save_dir / f"{video_path.stem}-processed.mp4"
     counting_config_path = _infer_counting_config_path((video_record or {}).get("location"))
+    annotations_path = _infer_annotations_path()
     command = _build_rtdetr_command(
         model_path=model_path,
         video_path=video_path,
         output_path=output_video_path,
         counting_config_path=counting_config_path,
+        annotations_path=annotations_path,
     )
 
     _run_cancel_check(progress_callback)
@@ -980,7 +1201,7 @@ def run_video_inference(
             f"{resolved_output_video_path}"
         )
 
-    processed_path = _backend_relative_path(resolved_output_video_path)
+    processed_path = _project_relative_path(resolved_output_video_path)
     if not processed_path:
         raise RuntimeError(
             "RT-DETR inference finished but could not resolve processedPath for API response."

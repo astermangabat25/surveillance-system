@@ -235,6 +235,17 @@ class InferenceStatus(BaseModel):
     modelPath: Optional[str] = None
     modelExists: bool
     ready: bool
+    packagePath: Optional[str] = None
+    vendoredPath: Optional[str] = None
+    usingVendoredCopy: Optional[bool] = None
+    missingFixedPath: Optional[str] = None
+
+
+class InferenceRequirementUploadResult(BaseModel):
+    requirementType: Literal["infer-config", "annotations", "counting-config"]
+    filename: str
+    savedPath: str
+    message: str
 
 
 class VideoUploadStatus(BaseModel):

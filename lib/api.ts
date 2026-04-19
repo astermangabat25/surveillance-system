@@ -242,6 +242,30 @@ export interface ModelInfo {
   uploadedAt?: string | null
 }
 
+export interface InferenceStatus {
+  installed: boolean
+  version?: string | null
+  preferredTag: string
+  fallbackTag: string
+  currentModel?: string | null
+  modelPath?: string | null
+  modelExists: boolean
+  ready: boolean
+  packagePath?: string | null
+  vendoredPath?: string | null
+  usingVendoredCopy?: boolean
+  missingFixedPath?: string | null
+}
+
+export type InferenceRequirementType = "infer-config" | "annotations" | "counting-config"
+
+export interface InferenceRequirementUploadResult {
+  requirementType: InferenceRequirementType
+  filename: string
+  savedPath: string
+  message: string
+}
+
 export interface DownloadedReport {
   blob: Blob
   filename: string
@@ -564,11 +588,26 @@ export function getCurrentModel() {
   return request<ModelInfo>("/api/models/current")
 }
 
+export function getInferenceStatus() {
+  return request<InferenceStatus>("/api/inference/status")
+}
+
 export function uploadModel(file: File) {
   const formData = new FormData()
   formData.set("file", file)
 
   return request<ModelInfo>("/api/models/upload", {
+    method: "POST",
+    body: formData,
+  })
+}
+
+export function uploadInferenceRequirement(payload: { file: File; requirementType: InferenceRequirementType }) {
+  const formData = new FormData()
+  formData.set("file", payload.file)
+  formData.set("requirementType", payload.requirementType)
+
+  return request<InferenceRequirementUploadResult>("/api/inference/requirements/upload", {
     method: "POST",
     body: formData,
   })
