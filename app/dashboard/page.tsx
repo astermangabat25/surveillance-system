@@ -297,6 +297,12 @@ export default function DashboardPage() {
     setZoomLevel(0)
   }
 
+  const handleLocationChange = (value: string) => {
+    setSelectedLocationId(value)
+    setFocusTime(undefined)
+    setZoomLevel(0)
+  }
+
   const handleAnalyticsZoom = (time: string) => {
     const canZoomInAnyChart = Boolean(traffic?.canZoomIn) || Boolean(losTraffic?.canZoomIn) || Boolean(occlusionTrends?.canZoomIn)
     if (!canZoomInAnyChart) {
@@ -322,8 +328,8 @@ export default function DashboardPage() {
           </div>
 
           <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_auto] xl:items-end xl:gap-4">
-            <div className="grid w-full grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
-              <div className="w-full min-w-0 xl:max-w-[15rem]">
+            <div className="grid w-full grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-[minmax(0,15rem)_12rem_11rem_14rem] xl:gap-2">
+              <div className="w-full min-w-0">
                 <FootageDatePicker
                   value={selectedDate}
                   onChange={handleDateChange}
@@ -333,7 +339,7 @@ export default function DashboardPage() {
               </div>
 
               <Select value={timeRange} onValueChange={handleTimeRangeChange}>
-                <SelectTrigger className="w-full rounded-2xl border-border bg-secondary text-foreground xl:max-w-[12rem]">
+                <SelectTrigger className="w-full rounded-2xl border-border bg-secondary text-foreground">
                   <Clock className="mr-2 h-4 w-4 text-muted-foreground" />
                   <SelectValue placeholder="Select time range" />
                 </SelectTrigger>
@@ -347,7 +353,7 @@ export default function DashboardPage() {
               </Select>
 
               <Select value={startTime} onValueChange={handleStartTimeChange}>
-                <SelectTrigger className="w-full rounded-2xl border-border bg-secondary text-foreground xl:max-w-[11rem]">
+                <SelectTrigger className="w-full rounded-2xl border-border bg-secondary text-foreground">
                   <SelectValue placeholder="Start time" />
                 </SelectTrigger>
                 <SelectContent className="max-h-80 rounded-xl border-border bg-popover">
@@ -359,8 +365,8 @@ export default function DashboardPage() {
                 </SelectContent>
               </Select>
 
-              <Select value={selectedLocationId} onValueChange={setSelectedLocationId}>
-                <SelectTrigger className="w-full rounded-2xl border-border bg-secondary text-foreground xl:max-w-[14rem]">
+              <Select value={selectedLocationId} onValueChange={handleLocationChange}>
+                <SelectTrigger className="w-full rounded-2xl border-border bg-secondary text-foreground">
                   <SelectValue placeholder="Select location" />
                 </SelectTrigger>
                 <SelectContent className="rounded-xl border-border bg-popover">
