@@ -56,7 +56,7 @@ export function OcclusionMap({ hourFilter, onHourFilterChange, data, loading = f
       </div>
 
       <div className="relative">
-        <CampusOsmMap selectedDate={selectedDate} className="aspect-[21/9] min-h-[24rem] w-full rounded-2xl border border-border" />
+        <CampusOsmMap selectedDate={selectedDate} className="h-[clamp(16rem,42vh,30rem)] w-full rounded-2xl border border-border" />
         {loading && (
           <div className="absolute inset-0 flex items-center justify-center rounded-2xl bg-background/50 text-sm text-muted-foreground backdrop-blur-[1px]">
             Loading map context...

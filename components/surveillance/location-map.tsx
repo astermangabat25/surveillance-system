@@ -25,7 +25,7 @@ export function LocationMap({ locations, selectedDate }: LocationMapProps) {
         <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] text-muted-foreground">{locations.length} locations</span>
       </div>
 
-      <CampusOsmMap selectedDate={selectedDate} className="aspect-[16/9] min-h-[21rem] w-full rounded-xl border border-border" />
+      <CampusOsmMap selectedDate={selectedDate} className="h-[clamp(14rem,36vh,24rem)] w-full rounded-xl border border-border" />
 
       <p className="mt-3 text-[11px] text-muted-foreground">
         Hover or click Gate 2, Gate 2.9, Gate 3, Gate 3.2, and Gate 3.5 to view LOS for the selected date.
