@@ -1,7 +1,10 @@
 "use client"
 
 import { Button } from "@/components/ui/button"
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import {
+  Bar,
+  BarChart,
   CartesianGrid,
   Legend,
   Line,
@@ -27,24 +30,26 @@ interface OcclusionTrendsChartProps {
   loading?: boolean
   onTimeSelect?: (time: string) => void
   onResetZoom?: () => void
+  chartType?: "line" | "bar"
+  onChartTypeChange?: (value: "line" | "bar") => void
 }
 
-const OCCLUSION_SERIES = [
-  { key: "Light", color: "#FACC15" },
-  { key: "Moderate", color: "#F97316" },
-  { key: "Heavy", color: "#EF4444" },
+const IN_OUT_SERIES = [
+  { key: "In", color: "#22C55E" },
+  { key: "Out", color: "#EF4444" },
 ]
 
 function formatRangeLabel(timeRange: string) {
-  return timeRange
-    .replace("whole-day", "Whole Day")
-    .replace("last-1h", "Last 1 Hour")
-    .replace("last-3h", "Last 3 Hours")
-    .replace("last-6h", "Last 6 Hours")
-    .replace("last-12h", "Last 12 Hours")
-    .replace("morning", "Morning")
-    .replace("afternoon", "Afternoon")
-    .replace("evening", "Evening")
+  const labels: Record<string, string> = {
+    "12h": "12 hours",
+    "6h": "6 hours",
+    "4h": "4 hours",
+    "3h": "3 hours",
+    "2h": "2 hours",
+    "1h": "1 hour",
+    "30m": "30 minutes",
+  }
+  return labels[timeRange] ?? timeRange
 }
 
 function formatDateLabel(selectedDate: string) {
@@ -71,6 +76,8 @@ export function OcclusionTrendsChart({
   loading = false,
   onTimeSelect,
   onResetZoom,
+  chartType = "line",
+  onChartTypeChange,
 }: OcclusionTrendsChartProps) {
   const timeLabelsById = new Map(data.map((point) => [point.id, point.time]))
   const subtitle = zoomLevel > 0
@@ -95,56 +102,97 @@ export function OcclusionTrendsChart({
     <div className="rounded-3xl border border-border bg-card p-6 shadow-elevated">
       <div className="mb-6 flex items-center justify-between gap-4">
         <div className="space-y-1">
-          <h3 className="text-base font-semibold text-foreground">Occlusion Class Trends</h3>
+          <h3 className="text-base font-semibold text-foreground">In And Out Graph</h3>
           <p className="text-sm text-muted-foreground">{subtitle}</p>
           <p className="text-xs text-muted-foreground">
-            Average visible pedestrians per occlusion class across {bucketMinutes}-minute intervals.
+            Cumulative gate flow grouped as In (Gate 2, Gate 3) and Out (Gate 2.9, Gate 3.2, Gate 3.5) across {bucketMinutes}-minute intervals.
           </p>
         </div>
-        {zoomLevel > 0 && onResetZoom && (
-          <Button variant="outline" size="sm" className="rounded-2xl" onClick={onResetZoom}>
-            <RotateCcw className="mr-2 h-4 w-4" />
-            Reset Zoom
-          </Button>
-        )}
+        <div className="flex items-center gap-2">
+          {typeof onChartTypeChange === "function" && (
+            <ToggleGroup
+              type="single"
+              value={chartType}
+              onValueChange={(value) => {
+                if (value === "line" || value === "bar") {
+                  onChartTypeChange(value)
+                }
+              }}
+              variant="outline"
+              size="sm"
+              className="rounded-xl border border-border"
+              aria-label="In And Out chart type"
+            >
+              <ToggleGroupItem value="line" className="px-3 text-xs">Line</ToggleGroupItem>
+              <ToggleGroupItem value="bar" className="px-3 text-xs">Bar</ToggleGroupItem>
+            </ToggleGroup>
+          )}
+          {zoomLevel > 0 && onResetZoom && (
+            <Button variant="outline" size="sm" className="rounded-2xl" onClick={onResetZoom}>
+              <RotateCcw className="mr-2 h-4 w-4" />
+              Reset Zoom
+            </Button>
+          )}
+        </div>
       </div>
 
       <div className="h-[320px]">
         {loading ? (
           <div className="flex h-full items-center justify-center text-muted-foreground">
             <Loader2 className="mr-2 h-5 w-5 animate-spin" />
-            Loading occlusion trends...
+            Loading In/Out traffic data...
           </div>
         ) : data.length > 0 ? (
           <ResponsiveContainer width="100%" height="100%">
-            <LineChart data={data} margin={{ top: 10, right: 16, left: 0, bottom: 0 }} onClick={handleChartClick}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#27272A" vertical={false} />
-              <XAxis
-                dataKey="id"
-                tickFormatter={(value) => timeLabelsById.get(String(value)) ?? String(value)}
-                stroke="#71717A"
-                tick={{ fill: "#71717A", fontSize: 12 }}
-                axisLine={{ stroke: "#27272A" }}
-              />
-              <YAxis stroke="#71717A" tick={{ fill: "#71717A", fontSize: 12 }} axisLine={{ stroke: "#27272A" }} />
-              <Tooltip labelFormatter={(value) => timeLabelsById.get(String(value)) ?? String(value)} />
-              <Legend wrapperStyle={{ paddingTop: "20px" }} formatter={(value) => <span className="text-sm text-foreground">{value}</span>} />
-              {OCCLUSION_SERIES.map((series) => (
-                <Line
-                  key={series.key}
-                  type="monotone"
-                  dataKey={series.key}
-                  stroke={series.color}
-                  strokeWidth={2.5}
-                  dot={false}
-                  activeDot={{ r: 4, fill: series.color }}
+            {chartType === "bar" ? (
+              <BarChart data={data} margin={{ top: 10, right: 16, left: 0, bottom: 0 }} onClick={handleChartClick}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#27272A" vertical={false} />
+                <XAxis
+                  dataKey="id"
+                  tickFormatter={(value) => timeLabelsById.get(String(value)) ?? String(value)}
+                  tickCount={6}
+                  stroke="#71717A"
+                  tick={{ fill: "#71717A", fontSize: 12 }}
+                  axisLine={{ stroke: "#27272A" }}
                 />
-              ))}
-            </LineChart>
+                <YAxis stroke="#71717A" tick={{ fill: "#71717A", fontSize: 12 }} axisLine={{ stroke: "#27272A" }} />
+                <Tooltip labelFormatter={(value) => timeLabelsById.get(String(value)) ?? String(value)} />
+                <Legend wrapperStyle={{ paddingTop: "20px" }} formatter={(value) => <span className="text-sm text-foreground">{value}</span>} />
+                {IN_OUT_SERIES.map((series) => (
+                  <Bar key={series.key} dataKey={series.key} fill={series.color} radius={[4, 4, 0, 0]} />
+                ))}
+              </BarChart>
+            ) : (
+              <LineChart data={data} margin={{ top: 10, right: 16, left: 0, bottom: 0 }} onClick={handleChartClick}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#27272A" vertical={false} />
+                <XAxis
+                  dataKey="id"
+                  tickFormatter={(value) => timeLabelsById.get(String(value)) ?? String(value)}
+                  tickCount={6}
+                  stroke="#71717A"
+                  tick={{ fill: "#71717A", fontSize: 12 }}
+                  axisLine={{ stroke: "#27272A" }}
+                />
+                <YAxis stroke="#71717A" tick={{ fill: "#71717A", fontSize: 12 }} axisLine={{ stroke: "#27272A" }} />
+                <Tooltip labelFormatter={(value) => timeLabelsById.get(String(value)) ?? String(value)} />
+                <Legend wrapperStyle={{ paddingTop: "20px" }} formatter={(value) => <span className="text-sm text-foreground">{value}</span>} />
+                {IN_OUT_SERIES.map((series) => (
+                  <Line
+                    key={series.key}
+                    type="monotone"
+                    dataKey={series.key}
+                    stroke={series.color}
+                    strokeWidth={2.5}
+                    dot={false}
+                    activeDot={{ r: 4, fill: series.color }}
+                  />
+                ))}
+              </LineChart>
+            )}
           </ResponsiveContainer>
         ) : (
           <div className="flex h-full items-center justify-center rounded-2xl border border-dashed border-border text-muted-foreground">
-            No occlusion-class detections are available for this time range yet.
+            No In/Out traffic data is available for this time range yet.
           </div>
         )}
       </div>

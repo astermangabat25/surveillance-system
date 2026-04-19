@@ -1,5 +1,6 @@
 @import 'tailwindcss';
 @import 'tw-animate-css';
+@import 'leaflet/dist/leaflet.css';
 
 @custom-variant dark (&:is(.dark *));
 
@@ -123,6 +124,13 @@
   body {
     @apply bg-background text-foreground;
   }
+}
+
+/* Leaflet tiles break under global img max-width rules (Tailwind preflight). */
+.leaflet-container .leaflet-tile,
+.leaflet-container .leaflet-marker-icon,
+.leaflet-container .leaflet-marker-shadow {
+  max-width: none !important;
 }
 
 /* Soft shadow utilities for elevated cards */

@@ -81,6 +81,17 @@ def safe_filename(filename: str) -> str:
     return cleaned.strip("-") or "upload.bin"
 
 
+def _inference_not_ready_detail(status: dict[str, Any]) -> str:
+    if not status.get("modelExists"):
+        return "Inference engine is not ready. Upload a valid model before processing videos."
+
+    missing_path = status.get("missingFixedPath")
+    if missing_path:
+        return f"Inference engine is not ready. Missing required pipeline path: {missing_path}"
+
+    return "Inference engine is not ready. Required inference pipeline artifacts are unavailable."
+
+
 def search_google_places(query: str) -> list[dict[str, Any]]:
     api_key = os.getenv("GOOGLE_MAPS_API_KEY")
     if not api_key:
@@ -324,9 +335,10 @@ async def upload_video(
 ) -> dict:
     status = inference.ultralytics_status()
     if not status["ready"]:
+        error_detail = _inference_not_ready_detail(status)
         if uploadId:
-            store.set_upload_status(uploadId, state="error", progress_percent=None, message="Inference engine is not ready.", error="Inference engine is not ready. Upload a valid model before processing videos.")
-        raise HTTPException(status_code=503, detail="Inference engine is not ready. Upload a valid model before processing videos.")
+            store.set_upload_status(uploadId, state="error", progress_percent=None, message="Inference engine is not ready.", error=error_detail)
+        raise HTTPException(status_code=503, detail=error_detail)
 
     safe_name = safe_filename(file.filename or "video.mp4")
     raw_target = store.RAW_VIDEOS_DIR / f"{uuid4().hex[:8]}-{safe_name}"
@@ -468,36 +480,61 @@ def get_dashboard_summary(date: Optional[str] = None) -> dict:
 @app.get("/api/dashboard/traffic", response_model=schemas.TrafficResponse)
 def get_dashboard_traffic(
     date: Optional[str] = None,
-    timeRange: str = "whole-day",
+    timeRange: str = "12h",
     focusTime: Optional[str] = None,
+    startTime: Optional[str] = None,
     zoomLevel: int = 0,
 ) -> dict[str, object]:
-    return store.dashboard_traffic(date, timeRange, focusTime, zoomLevel)
+    return store.dashboard_traffic(date, timeRange, focusTime, zoomLevel, startTime)
+
+
+@app.get("/api/dashboard/traffic-by-location", response_model=schemas.TrafficByLocationResponse)
+def get_dashboard_traffic_by_location(
+    date: Optional[str] = None,
+    timeRange: str = "12h",
+    focusTime: Optional[str] = None,
+    startTime: Optional[str] = None,
+    zoomLevel: int = 0,
+) -> dict[str, object]:
+    return store.dashboard_traffic_by_location(date, timeRange, focusTime, zoomLevel, startTime)
+
+
+@app.get("/api/dashboard/los", response_model=schemas.TrafficResponse)
+def get_dashboard_los(
+    date: Optional[str] = None,
+    timeRange: str = "12h",
+    focusTime: Optional[str] = None,
+    startTime: Optional[str] = None,
+    zoomLevel: int = 0,
+    locationId: Optional[str] = None,
+) -> dict[str, object]:
+    return store.dashboard_los(date, timeRange, focusTime, zoomLevel, locationId, startTime)
 
 
 @app.get("/api/dashboard/occlusion-trends", response_model=schemas.PTSITrendResponse)
 def get_dashboard_occlusion_trends(
     date: Optional[str] = None,
-    timeRange: str = "whole-day",
+    timeRange: str = "12h",
     focusTime: Optional[str] = None,
+    startTime: Optional[str] = None,
     zoomLevel: int = 0,
 ) -> dict[str, object]:
-    return store.dashboard_occlusion_trends(date, timeRange, focusTime, zoomLevel)
+    return store.dashboard_occlusion_trends(date, timeRange, focusTime, zoomLevel, startTime)
 
 
 @app.get("/api/dashboard/occlusion", response_model=schemas.PTSIMapResponse)
-def get_dashboard_occlusion(date: Optional[str] = None, timeRange: str = "whole-day") -> dict[str, object]:
-    return store.dashboard_occlusion(date, timeRange)
+def get_dashboard_occlusion(date: Optional[str] = None, timeRange: str = "12h", startTime: Optional[str] = None) -> dict[str, object]:
+    return store.dashboard_occlusion(date, timeRange, startTime)
 
 
 @app.get("/api/dashboard/ai-synthesis", response_model=schemas.AISynthesisResponse)
-def get_ai_synthesis(date: str = "2026-03-15", timeRange: str = "whole-day") -> dict:
-    return store.ai_synthesis(date, timeRange)
+def get_ai_synthesis(date: str = "2026-03-15", timeRange: str = "whole-day", startTime: Optional[str] = None) -> dict:
+    return store.ai_synthesis(date, timeRange, startTime)
 
 
 @app.get("/api/dashboard/export")
-def export_dashboard_report(date: str = "2026-03-15", timeRange: str = "whole-day") -> FileResponse:
-    report_path = store.export_dashboard_report(date, timeRange)
+def export_dashboard_report(date: str = "2026-03-15", timeRange: str = "whole-day", startTime: Optional[str] = None) -> FileResponse:
+    report_path = store.export_dashboard_report(date, timeRange, startTime)
     return FileResponse(report_path, media_type="application/zip", filename=report_path.name)
 
 

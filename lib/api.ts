@@ -123,6 +123,8 @@ export interface TrafficResponse {
   locationTotals: LocationTotal[]
 }
 
+export type TrafficByLocationResponse = Omit<TrafficResponse, "locationTotals">
+
 export interface PTSITrendResponse {
   timeRange: string
   series: TrafficPoint[]
@@ -559,30 +561,60 @@ export function getDashboardSummary(date?: string) {
   return request<DashboardSummary>(withQuery("/api/dashboard/summary", { date }))
 }
 
-export function getDashboardTraffic(date?: string, timeRange = "whole-day", focusTime?: string, zoomLevel = 0) {
+export function getDashboardTraffic(date?: string, timeRange = "12h", focusTime?: string, zoomLevel = 0, startTime?: string) {
   return request<TrafficResponse>(withQuery("/api/dashboard/traffic", {
     date,
     timeRange,
     focusTime,
+    startTime,
     zoomLevel: zoomLevel > 0 ? String(zoomLevel) : undefined,
   }))
 }
 
-export function getDashboardOcclusion(date?: string, timeRange = "whole-day") {
-  return request<PTSIMapResponse>(withQuery("/api/dashboard/occlusion", { date, timeRange }))
+export function getDashboardTrafficByLocation(date?: string, timeRange = "12h", focusTime?: string, zoomLevel = 0, startTime?: string) {
+  return request<TrafficByLocationResponse>(withQuery("/api/dashboard/traffic-by-location", {
+    date,
+    timeRange,
+    focusTime,
+    startTime,
+    zoomLevel: zoomLevel > 0 ? String(zoomLevel) : undefined,
+  }))
 }
 
-export function getDashboardOcclusionTrends(date?: string, timeRange = "whole-day", focusTime?: string, zoomLevel = 0) {
+export function getDashboardLOS(
+  date?: string,
+  timeRange = "12h",
+  focusTime?: string,
+  zoomLevel = 0,
+  locationId?: string,
+  startTime?: string,
+) {
+  return request<TrafficResponse>(withQuery("/api/dashboard/los", {
+    date,
+    timeRange,
+    focusTime,
+    startTime,
+    zoomLevel: zoomLevel > 0 ? String(zoomLevel) : undefined,
+    locationId,
+  }))
+}
+
+export function getDashboardOcclusion(date?: string, timeRange = "12h", startTime?: string) {
+  return request<PTSIMapResponse>(withQuery("/api/dashboard/occlusion", { date, timeRange, startTime }))
+}
+
+export function getDashboardOcclusionTrends(date?: string, timeRange = "12h", focusTime?: string, zoomLevel = 0, startTime?: string) {
   return request<PTSITrendResponse>(withQuery("/api/dashboard/occlusion-trends", {
     date,
     timeRange,
     focusTime,
+    startTime,
     zoomLevel: zoomLevel > 0 ? String(zoomLevel) : undefined,
   }))
 }
 
-export function getAISynthesis(date: string, timeRange: string) {
-  return request<AISynthesisResponse>(withQuery("/api/dashboard/ai-synthesis", { date, timeRange }))
+export function getAISynthesis(date: string, timeRange: string, startTime?: string) {
+  return request<AISynthesisResponse>(withQuery("/api/dashboard/ai-synthesis", { date, timeRange, startTime }))
 }
 
 export function searchVideos(query: string) {
@@ -618,8 +650,8 @@ export function uploadInferenceRequirement(payload: { file: File; requirementTyp
   })
 }
 
-export async function downloadDashboardReport(date: string, timeRange: string): Promise<DownloadedReport> {
-  const response = await fetch(`${API_BASE_URL}${withQuery("/api/dashboard/export", { date, timeRange })}`, {
+export async function downloadDashboardReport(date: string, timeRange: string, startTime?: string): Promise<DownloadedReport> {
+  const response = await fetch(`${API_BASE_URL}${withQuery("/api/dashboard/export", { date, timeRange, startTime })}`, {
     cache: "no-store",
   })
 

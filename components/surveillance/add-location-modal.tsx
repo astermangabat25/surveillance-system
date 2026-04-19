@@ -50,26 +50,26 @@ const SEARCHABLE_LOCATIONS: Array<{
 }> = [
   {
     aliases: ["edsa sec walk", "edsa sec walkway", "xavier hall", "xavier"],
-    lat: 14.6397,
-    lng: 121.0775,
-    address: "EDSA Sec Walk, Xavier Hall, Ateneo de Manila University",
+    lat: 14.6358,
+    lng: 121.07469,
+    address: "Gate 2, Ateneo de Manila University",
   },
   {
     aliases: ["kostka walk", "kostka walkway", "kostka hall", "kostka"],
-    lat: 14.639,
-    lng: 121.0781,
-    address: "Kostka Walk, Kostka Hall, Ateneo de Manila University",
+    lat: 14.63667,
+    lng: 121.07472,
+    address: "Gate 2.5, Ateneo de Manila University",
   },
   {
     aliases: ["gate 1", "gate 1 walkway", "gate one"],
-    lat: 14.6418,
-    lng: 121.0758,
+    lat: 14.6354,
+    lng: 121.0747,
     address: "Gate 1 Walkway, Ateneo de Manila University",
   },
   {
     aliases: ["gate 3", "gate 3 walkway", "gate three"],
-    lat: 14.6376,
-    lng: 121.0742,
+    lat: 14.64028,
+    lng: 121.07472,
     address: "Gate 3 Walkway, Ateneo de Manila University",
   },
   {

@@ -20,15 +20,16 @@ function formatDate(date: string) {
 }
 
 function formatTimeRange(timeRange: string) {
-  return timeRange
-    .replace("whole-day", "Whole Day")
-    .replace("last-1h", "Last 1 Hour")
-    .replace("last-3h", "Last 3 Hours")
-    .replace("last-6h", "Last 6 Hours")
-    .replace("last-12h", "Last 12 Hours")
-    .replace("morning", "Morning")
-    .replace("afternoon", "Afternoon")
-    .replace("evening", "Evening")
+  const labels: Record<string, string> = {
+    "12h": "12 hours",
+    "6h": "6 hours",
+    "4h": "4 hours",
+    "3h": "3 hours",
+    "2h": "2 hours",
+    "1h": "1 hour",
+    "30m": "30 minutes",
+  }
+  return labels[timeRange] ?? timeRange
 }
 
 const badgeToneClasses: Record<string, string> = {

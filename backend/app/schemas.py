@@ -118,6 +118,18 @@ class TrafficResponse(BaseModel):
     locationTotals: list[LocationTotal] = Field(default_factory=list)
 
 
+class TrafficByLocationResponse(BaseModel):
+    timeRange: str
+    series: list[dict[str, object]] = Field(default_factory=list)
+    bucketMinutes: int = 60
+    zoomLevel: int = 0
+    canZoomIn: bool = False
+    isDrilldown: bool = False
+    focusTime: Optional[str] = None
+    windowStart: Optional[str] = None
+    windowEnd: Optional[str] = None
+
+
 class PTSITrendResponse(BaseModel):
     timeRange: str
     series: list[dict[str, object]] = Field(default_factory=list)

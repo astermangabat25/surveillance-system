@@ -398,7 +398,7 @@ export default function SurveillancePage() {
         <AISearchBar />
         {/* Location Map - Below Search Bar */}
         <div className="px-4 pb-4">
-          <LocationMap locations={filteredLocations} />
+          <LocationMap locations={filteredLocations} selectedDate={selectedDate || undefined} />
         </div>
         <EventFeed events={events} loading={eventsLoading} />
       </aside>

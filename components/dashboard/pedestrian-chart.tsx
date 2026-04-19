@@ -1,9 +1,12 @@
 "use client"
 
 import { Button } from "@/components/ui/button"
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import {
   Area,
   AreaChart,
+  Bar,
+  BarChart,
   CartesianGrid,
   Legend,
   Line,
@@ -22,7 +25,7 @@ interface PedestrianChartProps {
   timeRange: string
   selectedDate: string
   data: TrafficPoint[]
-  metricKey: "cumulativeUniquePedestrians" | "averageVisiblePedestrians"
+  metricKey: "cumulativeUniquePedestrians" | "averageVisiblePedestrians" | "los"
   metricLabel: string
   seriesColor: string
   locationTotals?: LocationTotal[]
@@ -35,21 +38,56 @@ interface PedestrianChartProps {
   loading?: boolean
   onTimeSelect?: (time: string) => void
   onResetZoom?: () => void
+  chartType?: "line" | "bar"
+  onChartTypeChange?: (value: "line" | "bar") => void
+  legendPosition?: "top" | "bottom"
 }
 
 const SERIES_COLORS = ["#22C55E", "#06B6D4", "#3B82F6", "#F59E0B", "#A855F7"]
-const RESERVED_SERIES_KEYS = new Set(["id", "time", "cumulativeUniquePedestrians", "averageVisiblePedestrians"])
+const RESERVED_SERIES_KEYS = new Set(["id", "time", "cumulativeUniquePedestrians", "averageVisiblePedestrians", "los"])
+const LOS_COLOR_MAP: Record<string, string> = {
+  A: "#22C55E",
+  B: "#84CC16",
+  C: "#EAB308",
+  D: "#F97316",
+  E: "#EF4444",
+  F: "#B91C1C",
+}
+const LOS_SEVERITY_ORDER: Record<string, number> = {
+  A: 0,
+  B: 1,
+  C: 2,
+  D: 3,
+  E: 4,
+  F: 5,
+}
+
+const LOS_LABEL_BY_RANK: Record<number, string> = {
+  1: "A",
+  2: "B",
+  3: "C",
+  4: "D",
+  5: "E",
+  6: "F",
+}
+
+type LineDotProps = {
+  cx?: number
+  cy?: number
+  payload?: TrafficPoint
+}
 
 function formatTimeRangeLabel(timeRange: string) {
-  return timeRange
-    .replace("whole-day", "Whole Day")
-    .replace("last-1h", "Last 1 Hour")
-    .replace("last-3h", "Last 3 Hours")
-    .replace("last-6h", "Last 6 Hours")
-    .replace("last-12h", "Last 12 Hours")
-    .replace("morning", "Morning")
-    .replace("afternoon", "Afternoon")
-    .replace("evening", "Evening")
+  const labels: Record<string, string> = {
+    "12h": "12 hours",
+    "6h": "6 hours",
+    "4h": "4 hours",
+    "3h": "3 hours",
+    "2h": "2 hours",
+    "1h": "1 hour",
+    "30m": "30 minutes",
+  }
+  return labels[timeRange] ?? timeRange
 }
 
 function formatDateLabel(selectedDate: string) {
@@ -64,6 +102,9 @@ function formatDateLabel(selectedDate: string) {
 }
 
 function formatMetricValue(metricKey: PedestrianChartProps["metricKey"], value: number) {
+  if (metricKey === "los") {
+    return LOS_LABEL_BY_RANK[Math.round(value)] ?? "--"
+  }
   return metricKey === "averageVisiblePedestrians" ? value.toFixed(2) : Math.round(value).toLocaleString()
 }
 
@@ -122,19 +163,50 @@ export function PedestrianChart({
   loading = false,
   onTimeSelect,
   onResetZoom,
+  chartType,
+  onChartTypeChange,
+  legendPosition = "bottom",
 }: PedestrianChartProps) {
   const timeLabelsById = new Map(data.map((point) => [point.id, point.time]))
   const locationSeries = Array.from(
     new Set([
       ...locationTotals.map((item) => item.location),
-      ...data.flatMap((point) => Object.keys(point).filter((key) => !RESERVED_SERIES_KEYS.has(key))),
+      ...data.flatMap((point) =>
+        Object.keys(point).filter((key) => !RESERVED_SERIES_KEYS.has(key) && !key.endsWith("__los")),
+      ),
     ]),
   ).map((location, index) => ({
     key: location,
     color: SERIES_COLORS[index % SERIES_COLORS.length],
   }))
 
+  const lineColorBySeriesKey = Object.fromEntries(
+    locationSeries.map((series) => {
+      let worstLos: string | null = null
+      let worstRank = -1
+
+      for (const point of data) {
+        const losValue = point[`${series.key}__los`]
+        if (typeof losValue !== "string") {
+          continue
+        }
+        const rank = LOS_SEVERITY_ORDER[losValue]
+        if (rank == null) {
+          continue
+        }
+        if (rank > worstRank) {
+          worstRank = rank
+          worstLos = losValue
+        }
+      }
+
+      return [series.key, (worstLos && LOS_COLOR_MAP[worstLos]) || series.color]
+    }),
+  )
+
   const showLocationBreakdown = metricKey === "cumulativeUniquePedestrians" && locationSeries.length > 0
+  const isLosMetric = metricKey === "los"
+  const chartTypeSelectionEnabled = typeof onChartTypeChange === "function" && typeof chartType === "string"
 
   const totals = locationTotals.map((item, index) => ({
     location: item.location,
@@ -160,6 +232,22 @@ export function PedestrianChart({
     }
   }
 
+  const chartMargin = legendPosition === "top"
+    ? { top: 36, right: 30, left: 0, bottom: 0 }
+    : { top: 10, right: 30, left: 0, bottom: 0 }
+
+  const legendProps = legendPosition === "top"
+    ? {
+        verticalAlign: "top" as const,
+        align: "center" as const,
+        wrapperStyle: { paddingBottom: "8px" },
+      }
+    : {
+        verticalAlign: "bottom" as const,
+        align: "center" as const,
+        wrapperStyle: { paddingTop: "20px" },
+      }
+
   return (
     <div className="rounded-3xl border border-border bg-card p-6 shadow-elevated">
       <div className="mb-6 flex items-center justify-between">
@@ -168,12 +256,32 @@ export function PedestrianChart({
           <p className="text-sm text-muted-foreground">{subtitle}</p>
           <p className="mt-1 text-xs text-muted-foreground">{description}</p>
         </div>
-        {zoomLevel > 0 && onResetZoom && (
-          <Button variant="outline" size="sm" className="rounded-2xl" onClick={onResetZoom}>
-            <RotateCcw className="mr-2 h-4 w-4" />
-            Reset Zoom
-          </Button>
-        )}
+        <div className="flex items-center gap-2">
+          {chartTypeSelectionEnabled && (
+            <ToggleGroup
+              type="single"
+              value={chartType}
+              onValueChange={(value) => {
+                if (value === "line" || value === "bar") {
+                  onChartTypeChange(value)
+                }
+              }}
+              variant="outline"
+              size="sm"
+              className="rounded-xl border border-border"
+              aria-label={`${title} chart type`}
+            >
+              <ToggleGroupItem value="line" className="px-3 text-xs">Line</ToggleGroupItem>
+              <ToggleGroupItem value="bar" className="px-3 text-xs">Bar</ToggleGroupItem>
+            </ToggleGroup>
+          )}
+          {zoomLevel > 0 && onResetZoom && (
+            <Button variant="outline" size="sm" className="rounded-2xl" onClick={onResetZoom}>
+              <RotateCcw className="mr-2 h-4 w-4" />
+              Reset Zoom
+            </Button>
+          )}
+        </div>
       </div>
 
       <div className="h-[400px]">
@@ -185,73 +293,170 @@ export function PedestrianChart({
         ) : data.length > 0 ? (
           <ResponsiveContainer width="100%" height="100%">
             {showLocationBreakdown ? (
-              <LineChart data={data} margin={{ top: 10, right: 30, left: 0, bottom: 0 }} onClick={handleChartClick}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#27272A" vertical={false} />
-                <XAxis
-                  dataKey="id"
-                  tickFormatter={(value) => timeLabelsById.get(String(value)) ?? String(value)}
-                  stroke="#71717A"
-                  tick={{ fill: "#71717A", fontSize: 12 }}
-                  axisLine={{ stroke: "#27272A" }}
-                />
-                <YAxis
-                  stroke="#71717A"
-                  tick={{ fill: "#71717A", fontSize: 12 }}
-                  axisLine={{ stroke: "#27272A" }}
-                  label={{ value: metricLabel, angle: -90, position: "insideLeft", fill: "#71717A", fontSize: 12 }}
-                />
-                <Tooltip content={<CustomTooltip metricKey={metricKey} />} />
-                <Legend wrapperStyle={{ paddingTop: "20px" }} formatter={(value) => <span className="text-sm text-foreground">{value}</span>} />
-                {locationSeries.map((series) => (
+              chartType === "bar" ? (
+                <BarChart data={data} margin={chartMargin} onClick={handleChartClick}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#27272A" vertical={false} />
+                  <XAxis
+                    dataKey="id"
+                    tickFormatter={(value) => timeLabelsById.get(String(value)) ?? String(value)}
+                    tickCount={6}
+                    stroke="#71717A"
+                    tick={{ fill: "#71717A", fontSize: 12 }}
+                    axisLine={{ stroke: "#27272A" }}
+                  />
+                  <YAxis
+                    stroke="#71717A"
+                    tick={{ fill: "#71717A", fontSize: 12 }}
+                    axisLine={{ stroke: "#27272A" }}
+                    label={{ value: metricLabel, angle: -90, position: "insideLeft", fill: "#71717A", fontSize: 12 }}
+                  />
+                  <Tooltip content={<CustomTooltip metricKey={metricKey} />} />
+                  <Legend {...legendProps} formatter={(value) => <span className="text-sm text-foreground">{value}</span>} />
+                  {locationSeries.map((series) => (
+                    <Bar key={series.key} dataKey={series.key} name={series.key} fill={series.color} radius={[4, 4, 0, 0]} />
+                  ))}
+                </BarChart>
+              ) : (
+                <LineChart data={data} margin={chartMargin} onClick={handleChartClick}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#27272A" vertical={false} />
+                  <XAxis
+                    dataKey="id"
+                    tickFormatter={(value) => timeLabelsById.get(String(value)) ?? String(value)}
+                    tickCount={6}
+                    stroke="#71717A"
+                    tick={{ fill: "#71717A", fontSize: 12 }}
+                    axisLine={{ stroke: "#27272A" }}
+                  />
+                  <YAxis
+                    stroke="#71717A"
+                    tick={{ fill: "#71717A", fontSize: 12 }}
+                    axisLine={{ stroke: "#27272A" }}
+                    label={{ value: metricLabel, angle: -90, position: "insideLeft", fill: "#71717A", fontSize: 12 }}
+                  />
+                  <Tooltip content={<CustomTooltip metricKey={metricKey} />} />
+                  <Legend {...legendProps} formatter={(value) => <span className="text-sm text-foreground">{value}</span>} />
+                  {locationSeries.map((series) => (
+                    <Line
+                      key={series.key}
+                      type="monotone"
+                      dataKey={series.key}
+                      name={series.key}
+                      stroke={lineColorBySeriesKey[series.key] ?? series.color}
+                      strokeWidth={2.5}
+                      dot={(props: LineDotProps) => {
+                        const losValue = props?.payload?.[`${series.key}__los`]
+                        const pointColor = typeof losValue === "string" ? (LOS_COLOR_MAP[losValue] ?? series.color) : series.color
+                        return <circle cx={props.cx} cy={props.cy} r={3} fill={pointColor} stroke={pointColor} />
+                      }}
+                      activeDot={(props: LineDotProps) => {
+                        const losValue = props?.payload?.[`${series.key}__los`]
+                        const pointColor = typeof losValue === "string" ? (LOS_COLOR_MAP[losValue] ?? series.color) : series.color
+                        return <circle cx={props.cx} cy={props.cy} r={4} fill={pointColor} stroke={pointColor} />
+                      }}
+                      connectNulls
+                    />
+                  ))}
+                </LineChart>
+              )
+            ) : (
+              chartType === "bar" ? (
+                <BarChart data={data} margin={chartMargin} onClick={handleChartClick}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#27272A" vertical={false} />
+                  <XAxis
+                    dataKey="id"
+                    tickFormatter={(value) => timeLabelsById.get(String(value)) ?? String(value)}
+                    tickCount={6}
+                    stroke="#71717A"
+                    tick={{ fill: "#71717A", fontSize: 12 }}
+                    axisLine={{ stroke: "#27272A" }}
+                  />
+                  <YAxis
+                    stroke="#71717A"
+                    tick={{ fill: "#71717A", fontSize: 12 }}
+                    axisLine={{ stroke: "#27272A" }}
+                    domain={isLosMetric ? [1, 6] : undefined}
+                    ticks={isLosMetric ? [1, 2, 3, 4, 5, 6] : undefined}
+                    tickFormatter={isLosMetric ? (value) => LOS_LABEL_BY_RANK[Number(value)] ?? String(value) : undefined}
+                    label={{ value: metricLabel, angle: -90, position: "insideLeft", fill: "#71717A", fontSize: 12 }}
+                  />
+                  <Tooltip content={<CustomTooltip metricKey={metricKey} />} />
+                  <Legend {...legendProps} formatter={(value) => <span className="text-sm text-foreground">{value}</span>} />
+                  <Bar dataKey={metricKey} name={metricLabel} fill={seriesColor} radius={[4, 4, 0, 0]} cursor={canZoomIn ? "pointer" : "default"} />
+                </BarChart>
+              ) : chartType === "line" ? (
+                <LineChart data={data} margin={chartMargin} onClick={handleChartClick}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#27272A" vertical={false} />
+                  <XAxis
+                    dataKey="id"
+                    tickFormatter={(value) => timeLabelsById.get(String(value)) ?? String(value)}
+                    tickCount={6}
+                    stroke="#71717A"
+                    tick={{ fill: "#71717A", fontSize: 12 }}
+                    axisLine={{ stroke: "#27272A" }}
+                  />
+                  <YAxis
+                    stroke="#71717A"
+                    tick={{ fill: "#71717A", fontSize: 12 }}
+                    axisLine={{ stroke: "#27272A" }}
+                    domain={isLosMetric ? [1, 6] : undefined}
+                    ticks={isLosMetric ? [1, 2, 3, 4, 5, 6] : undefined}
+                    tickFormatter={isLosMetric ? (value) => LOS_LABEL_BY_RANK[Number(value)] ?? String(value) : undefined}
+                    label={{ value: metricLabel, angle: -90, position: "insideLeft", fill: "#71717A", fontSize: 12 }}
+                  />
+                  <Tooltip content={<CustomTooltip metricKey={metricKey} />} />
+                  <Legend {...legendProps} formatter={(value) => <span className="text-sm text-foreground">{value}</span>} />
                   <Line
-                    key={series.key}
                     type="monotone"
-                    dataKey={series.key}
-                    name={series.key}
-                    stroke={series.color}
+                    dataKey={metricKey}
+                    name={metricLabel}
+                    stroke={seriesColor}
                     strokeWidth={2.5}
                     dot={false}
-                    activeDot={{ r: 4, fill: series.color }}
-                    connectNulls
+                    activeDot={{ r: 4, fill: seriesColor }}
+                    cursor={canZoomIn ? "pointer" : "default"}
                   />
-                ))}
-              </LineChart>
-            ) : (
-              <AreaChart data={data} margin={{ top: 10, right: 30, left: 0, bottom: 0 }} onClick={handleChartClick}>
-                <defs>
-                  <linearGradient id={`${metricKey}-gradient`} x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor={seriesColor} stopOpacity={0.3} />
-                    <stop offset="95%" stopColor={seriesColor} stopOpacity={0} />
-                  </linearGradient>
-                </defs>
-                <CartesianGrid strokeDasharray="3 3" stroke="#27272A" vertical={false} />
-                <XAxis
-                  dataKey="id"
-                  tickFormatter={(value) => timeLabelsById.get(String(value)) ?? String(value)}
-                  stroke="#71717A"
-                  tick={{ fill: "#71717A", fontSize: 12 }}
-                  axisLine={{ stroke: "#27272A" }}
-                />
-                <YAxis
-                  stroke="#71717A"
-                  tick={{ fill: "#71717A", fontSize: 12 }}
-                  axisLine={{ stroke: "#27272A" }}
-                  label={{ value: metricLabel, angle: -90, position: "insideLeft", fill: "#71717A", fontSize: 12 }}
-                />
-                <Tooltip content={<CustomTooltip metricKey={metricKey} />} />
-                <Legend wrapperStyle={{ paddingTop: "20px" }} formatter={(value) => <span className="text-sm text-foreground">{value}</span>} />
-                <Area
-                  type="linear"
-                  dataKey={metricKey}
-                  name={metricLabel}
-                  stroke={seriesColor}
-                  strokeWidth={2.5}
-                  fill={`url(#${metricKey}-gradient)`}
-                  dot={false}
-                  activeDot={{ r: 4, fill: seriesColor }}
-                  cursor={canZoomIn ? "pointer" : "default"}
-                />
-              </AreaChart>
+                </LineChart>
+              ) : (
+                <AreaChart data={data} margin={chartMargin} onClick={handleChartClick}>
+                  <defs>
+                    <linearGradient id={`${metricKey}-gradient`} x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor={seriesColor} stopOpacity={0.3} />
+                      <stop offset="95%" stopColor={seriesColor} stopOpacity={0} />
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#27272A" vertical={false} />
+                  <XAxis
+                    dataKey="id"
+                    tickFormatter={(value) => timeLabelsById.get(String(value)) ?? String(value)}
+                    tickCount={6}
+                    stroke="#71717A"
+                    tick={{ fill: "#71717A", fontSize: 12 }}
+                    axisLine={{ stroke: "#27272A" }}
+                  />
+                  <YAxis
+                    stroke="#71717A"
+                    tick={{ fill: "#71717A", fontSize: 12 }}
+                    axisLine={{ stroke: "#27272A" }}
+                    domain={isLosMetric ? [1, 6] : undefined}
+                    ticks={isLosMetric ? [1, 2, 3, 4, 5, 6] : undefined}
+                    tickFormatter={isLosMetric ? (value) => LOS_LABEL_BY_RANK[Number(value)] ?? String(value) : undefined}
+                    label={{ value: metricLabel, angle: -90, position: "insideLeft", fill: "#71717A", fontSize: 12 }}
+                  />
+                  <Tooltip content={<CustomTooltip metricKey={metricKey} />} />
+                  <Legend {...legendProps} formatter={(value) => <span className="text-sm text-foreground">{value}</span>} />
+                  <Area
+                    type="linear"
+                    dataKey={metricKey}
+                    name={metricLabel}
+                    stroke={seriesColor}
+                    strokeWidth={2.5}
+                    fill={`url(#${metricKey}-gradient)`}
+                    dot={false}
+                    activeDot={{ r: 4, fill: seriesColor }}
+                    cursor={canZoomIn ? "pointer" : "default"}
+                  />
+                </AreaChart>
+              )
             )}
           </ResponsiveContainer>
         ) : (
