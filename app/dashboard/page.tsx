@@ -75,7 +75,7 @@ const getCurrentLocalDate = () => {
 
 export default function DashboardPage() {
   const { settledUploadsVersion } = useUploadQueue()
-  const [selectedDate, setSelectedDate] = useState(() => getCurrentLocalDate())
+  const [selectedDate, setSelectedDate] = useState("")
   const [timeRange, setTimeRange] = useState("12h")
   const [startTime, setStartTime] = useState("00:00")
   const [hourFilter, setHourFilter] = useState("all")
@@ -108,15 +108,23 @@ export default function DashboardPage() {
   const [actionError, setActionError] = useState<string | null>(null)
   const [requirementUploadMessage, setRequirementUploadMessage] = useState<string | null>(null)
 
+  useEffect(() => {
+    setSelectedDate(getCurrentLocalDate())
+  }, [])
+
   const loadDashboard = useCallback(async () => {
+    if (!selectedDate) {
+      return
+    }
+
     setDashboardLoading(true)
     try {
       const [summaryResponse, trafficResponse, losTrafficResponse, occlusionTrendsResponse, occlusionResponse, synthesisResponse] = await Promise.all([
-        getDashboardSummary(selectedDate || undefined),
-        getDashboardTraffic(selectedDate || undefined, timeRange, focusTime, zoomLevel, startTime),
-        getDashboardLOS(selectedDate || undefined, timeRange, focusTime, zoomLevel, selectedLocationId || undefined, startTime),
-        getDashboardOcclusionTrends(selectedDate || undefined, timeRange, focusTime, zoomLevel, startTime),
-        getDashboardOcclusion(selectedDate || undefined, timeRange, startTime),
+        getDashboardSummary(selectedDate),
+        getDashboardTraffic(selectedDate, timeRange, focusTime, zoomLevel, startTime),
+        getDashboardLOS(selectedDate, timeRange, focusTime, zoomLevel, selectedLocationId || undefined, startTime),
+        getDashboardOcclusionTrends(selectedDate, timeRange, focusTime, zoomLevel, startTime),
+        getDashboardOcclusion(selectedDate, timeRange, startTime),
         getAISynthesis(selectedDate, timeRange, startTime),
       ])
 
