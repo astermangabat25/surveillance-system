@@ -30,15 +30,19 @@ import {
   getAISynthesis,
   getCurrentModel,
   getDashboardLOS,
+  getInferenceStatus,
   getDashboardOcclusion,
   getDashboardOcclusionTrends,
   getDashboardSummary,
   getDashboardTraffic,
   getLocations,
+  uploadInferenceRequirement,
   uploadModel,
   type AISynthesisResponse,
   type DashboardSummary,
   type LocationRecord,
+  type InferenceStatus,
+  type InferenceRequirementType,
   type ModelInfo,
   type PTSIMapResponse,
   type PTSITrendResponse,
@@ -75,6 +79,8 @@ export default function DashboardPage() {
   const [inOutChartType, setInOutChartType] = useState<"line" | "bar">("line")
   const [modelDialogOpen, setModelDialogOpen] = useState(false)
   const [modelFile, setModelFile] = useState<File | null>(null)
+  const [requirementFile, setRequirementFile] = useState<File | null>(null)
+  const [requirementType, setRequirementType] = useState<InferenceRequirementType>("infer-config")
   const [summary, setSummary] = useState<DashboardSummary | null>(null)
   const [traffic, setTraffic] = useState<TrafficResponse | null>(null)
   const [losTraffic, setLosTraffic] = useState<TrafficResponse | null>(null)
@@ -85,13 +91,16 @@ export default function DashboardPage() {
   const [selectedLocationId, setSelectedLocationId] = useState<string>("")
   const [footageDates, setFootageDates] = useState<string[]>([])
   const [modelInfo, setModelInfo] = useState<ModelInfo | null>(null)
+  const [inferenceStatus, setInferenceStatus] = useState<InferenceStatus | null>(null)
   const [dashboardLoading, setDashboardLoading] = useState(true)
   const [modelLoading, setModelLoading] = useState(true)
   const [modelUploading, setModelUploading] = useState(false)
+  const [requirementUploading, setRequirementUploading] = useState(false)
   const [reportExporting, setReportExporting] = useState(false)
   const [dashboardError, setDashboardError] = useState<string | null>(null)
   const [modelError, setModelError] = useState<string | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
+  const [requirementUploadMessage, setRequirementUploadMessage] = useState<string | null>(null)
 
   const loadDashboard = useCallback(async () => {
     setDashboardLoading(true)
@@ -128,8 +137,9 @@ export default function DashboardPage() {
   const loadModelInfo = useCallback(async () => {
     setModelLoading(true)
     try {
-      const response = await getCurrentModel()
-      setModelInfo(response)
+      const [modelResponse, inferenceResponse] = await Promise.all([getCurrentModel(), getInferenceStatus()])
+      setModelInfo(modelResponse)
+      setInferenceStatus(inferenceResponse)
       setModelError(null)
     } catch (error) {
       setModelError(error instanceof Error ? error.message : "Failed to load model information.")
@@ -188,8 +198,8 @@ export default function DashboardPage() {
 
     setModelUploading(true)
     try {
-      const response = await uploadModel(modelFile)
-      setModelInfo(response)
+      await uploadModel(modelFile)
+      await loadModelInfo()
       setModelError(null)
       setModelDialogOpen(false)
       setModelFile(null)
@@ -197,6 +207,28 @@ export default function DashboardPage() {
       setModelError(error instanceof Error ? error.message : "Failed to upload model.")
     } finally {
       setModelUploading(false)
+    }
+  }
+
+  const handleRequirementUpload = async () => {
+    if (!requirementFile) {
+      return
+    }
+
+    setRequirementUploading(true)
+    try {
+      const response = await uploadInferenceRequirement({
+        file: requirementFile,
+        requirementType,
+      })
+      setRequirementUploadMessage(`${response.message} Saved to ${response.savedPath}`)
+      setActionError(null)
+      setRequirementFile(null)
+      await loadModelInfo()
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "Failed to upload requirement file.")
+    } finally {
+      setRequirementUploading(false)
     }
   }
 
@@ -223,6 +255,8 @@ export default function DashboardPage() {
 
   const currentModelLabel = modelInfo?.currentModel ?? "No model uploaded yet"
   const currentModelTimestamp = modelInfo?.uploadedAt ? new Date(modelInfo.uploadedAt).toLocaleString("en-US") : null
+  const inferenceReady = Boolean(inferenceStatus?.ready)
+  const missingRequiredPath = inferenceStatus?.missingFixedPath
   const bannerError = dashboardError ?? modelError ?? actionError
 
   const handleDateChange = (value: string) => {
@@ -341,7 +375,77 @@ export default function DashboardPage() {
                       {currentModelTimestamp && (
                         <p className="mt-1 text-[11px] text-muted-foreground">Uploaded {currentModelTimestamp}</p>
                       )}
+                      {!modelLoading && (
+                        <p className={`mt-2 text-[11px] font-medium ${inferenceReady ? "text-emerald-600" : "text-amber-600"}`}>
+                          {inferenceReady ? "Inference ready for video processing" : "Inference not ready yet"}
+                        </p>
+                      )}
                     </div>
+                  </div>
+                </div>
+
+                <div className="rounded-2xl border border-border bg-secondary p-4">
+                  <p className="text-sm font-medium text-foreground">Inference Requirements</p>
+                  <p className="mt-1 text-xs text-muted-foreground">The backend must satisfy all checks below before video upload processing can start.</p>
+
+                  <ul className="mt-3 space-y-1 text-xs text-foreground">
+                    <li>Model uploaded (.pt/.pth): {inferenceStatus?.modelExists ? "OK" : "Missing"}</li>
+                    <li>RT-DETR pipeline files found: {inferenceStatus?.installed ? "OK" : "Missing"}</li>
+                    <li>Ready to process videos: {inferenceReady ? "Yes" : "No"}</li>
+                  </ul>
+
+                  <div className="mt-3 rounded-xl border border-border/70 bg-background/60 p-3 text-[11px] text-muted-foreground">
+                    <p className="font-medium text-foreground">Required files checklist</p>
+                    <p className="mt-1">1. tools/infer.py in the RT-DETR repo</p>
+                    <p>2. Config in backend/storage/inference_requirements/configs/rtdetr/</p>
+                    <p>3. Counting config in backend/storage/inference_requirements/counting/</p>
+                    <p>4. Active model weights (.pt or .pth)</p>
+                  </div>
+
+                  {missingRequiredPath && (
+                    <p className="mt-3 text-[11px] text-amber-700">
+                      Missing required path: {missingRequiredPath}
+                    </p>
+                  )}
+
+                  <div className="mt-4 space-y-3 rounded-xl border border-border/70 bg-background/60 p-3">
+                    <p className="text-xs font-medium text-foreground">Upload Missing Requirement File</p>
+
+                    <Select value={requirementType} onValueChange={(value) => setRequirementType(value as InferenceRequirementType)}>
+                      <SelectTrigger className="h-9 rounded-xl border-border bg-background text-xs text-foreground">
+                        <SelectValue placeholder="Select requirement type" />
+                      </SelectTrigger>
+                      <SelectContent className="rounded-xl border-border bg-popover">
+                        <SelectItem value="infer-config" className="rounded-lg text-foreground">Infer Config (.yml/.yaml)</SelectItem>
+                        <SelectItem value="annotations" className="rounded-lg text-foreground">Annotations (.json)</SelectItem>
+                        <SelectItem value="counting-config" className="rounded-lg text-foreground">Counting Config (.json)</SelectItem>
+                      </SelectContent>
+                    </Select>
+
+                    <input
+                      type="file"
+                      accept={requirementType === "infer-config" ? ".yml,.yaml" : ".json"}
+                      onChange={(e) => setRequirementFile(e.target.files?.[0] || null)}
+                      className="block w-full text-xs text-muted-foreground file:mr-3 file:rounded-lg file:border-0 file:bg-secondary file:px-3 file:py-2 file:text-xs file:font-medium file:text-foreground hover:file:bg-secondary/80"
+                    />
+
+                    <Button
+                      onClick={handleRequirementUpload}
+                      disabled={!requirementFile || requirementUploading}
+                      variant="outline"
+                      className="h-9 w-full rounded-xl border-border text-xs text-foreground hover:bg-secondary"
+                    >
+                      {requirementUploading ? (
+                        <>
+                          <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
+                          Uploading Requirement...
+                        </>
+                      ) : (
+                        "Upload Requirement File"
+                      )}
+                    </Button>
+
+                    {requirementUploadMessage && <p className="text-[11px] text-emerald-700">{requirementUploadMessage}</p>}
                   </div>
                 </div>
 

@@ -543,6 +543,47 @@ def get_inference_status() -> dict:
     return inference.ultralytics_status()
 
 
+@app.post("/api/inference/requirements/upload", response_model=schemas.InferenceRequirementUploadResult, status_code=201)
+async def upload_inference_requirement(
+    file: UploadFile = File(...),
+    requirementType: str = Form(...),
+) -> dict:
+    requirement_type = requirementType.strip().lower()
+    if requirement_type not in {"infer-config", "annotations", "counting-config"}:
+        raise HTTPException(status_code=400, detail="Invalid requirementType. Use infer-config, annotations, or counting-config.")
+
+    filename = safe_filename(file.filename or "upload.bin")
+    suffix = Path(filename).suffix.lower()
+    repo_dir = inference.occlusion_repo_dir()
+
+    if requirement_type == "infer-config":
+        if suffix not in {".yml", ".yaml"}:
+            raise HTTPException(status_code=400, detail="infer-config must be a .yml or .yaml file")
+        target_dir = inference.requirements_config_dir()
+    elif requirement_type == "annotations":
+        if suffix != ".json":
+            raise HTTPException(status_code=400, detail="annotations must be a .json file")
+        target_dir = inference.requirements_annotations_dir()
+    else:
+        if suffix != ".json":
+            raise HTTPException(status_code=400, detail="counting-config must be a .json file")
+        target_dir = inference.requirements_counting_dir()
+
+    target_dir.mkdir(parents=True, exist_ok=True)
+    target = target_dir / filename
+    target.write_bytes(await file.read())
+
+    # Always return project-relative paths (never absolute) for frontend display.
+    saved_path = os.path.relpath(str(target.resolve(strict=False)), start=str(REPO_ROOT.resolve(strict=False)))
+
+    return {
+        "requirementType": requirement_type,
+        "filename": filename,
+        "savedPath": saved_path,
+        "message": "Requirement file uploaded successfully.",
+    }
+
+
 @app.post("/api/models/upload", response_model=schemas.ModelInfo, status_code=201)
 async def upload_model(file: UploadFile = File(...)) -> dict:
     filename = safe_filename(file.filename or "model.pt")
