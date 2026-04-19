@@ -87,30 +87,118 @@ function computeSchedule(startTime: string, durationHours: string) {
   }
 }
 
+const AUTO_DURATION_GUIDANCE_MESSAGE = "Couldn't auto-read video duration. Enter duration manually."
+
+const ACCEPTED_VIDEO_MIME_TYPES = new Set(["video/mp4", "video/x-msvideo", "video/avi", "video/msvideo"])
+
+function isAcceptedVideoFile(file: File) {
+  const normalizedName = file.name.toLowerCase()
+  if (normalizedName.endsWith(".mp4") || normalizedName.endsWith(".avi")) {
+    return true
+  }
+
+  return ACCEPTED_VIDEO_MIME_TYPES.has(file.type.toLowerCase())
+}
+
 function readVideoDuration(file: File) {
   return new Promise<number>((resolve, reject) => {
     const video = document.createElement("video")
     const objectUrl = URL.createObjectURL(file)
+    const timeoutMs = 7000
+    const seekProbeTime = 10_000_000
+    let hasSettled = false
+    let usedSeekWorkaround = false
+    let timeoutId: ReturnType<typeof setTimeout> | null = null
+
+    const removeListeners = () => {
+      video.removeEventListener("loadedmetadata", handleDurationCandidates)
+      video.removeEventListener("durationchange", handleDurationCandidates)
+      video.removeEventListener("timeupdate", handleSeekResolution)
+      video.removeEventListener("seeked", handleSeekResolution)
+      video.removeEventListener("error", handleError)
+    }
 
     const cleanup = () => {
+      if (timeoutId) {
+        clearTimeout(timeoutId)
+        timeoutId = null
+      }
+      removeListeners()
       URL.revokeObjectURL(objectUrl)
       video.removeAttribute("src")
+      video.load()
+    }
+
+    const settle = (callback: () => void) => {
+      if (hasSettled) {
+        return
+      }
+      hasSettled = true
+      callback()
+      cleanup()
+    }
+
+    const resolveIfFiniteDuration = () => {
+      const duration = Number(video.duration)
+      if (!Number.isFinite(duration) || duration <= 0) {
+        return false
+      }
+
+      if (usedSeekWorkaround) {
+        try {
+          video.currentTime = 0
+        } catch {
+          // Ignore reset errors; duration has already been resolved.
+        }
+      }
+
+      settle(() => resolve(duration))
+      return true
+    }
+
+    const attemptSeekWorkaround = () => {
+      if (usedSeekWorkaround) {
+        return
+      }
+
+      usedSeekWorkaround = true
+      try {
+        video.currentTime = seekProbeTime
+      } catch {
+        settle(() => reject(new Error("Failed to seek video for duration probing.")))
+      }
+    }
+
+    function handleDurationCandidates() {
+      if (resolveIfFiniteDuration()) {
+        return
+      }
+
+      const duration = Number(video.duration)
+      if (!Number.isFinite(duration) || Number.isNaN(duration) || duration === Infinity) {
+        attemptSeekWorkaround()
+      }
+    }
+
+    function handleSeekResolution() {
+      resolveIfFiniteDuration()
+    }
+
+    function handleError() {
+      settle(() => reject(new Error("Could not read the selected video's duration.")))
     }
 
     video.preload = "metadata"
-    video.onloadedmetadata = () => {
-      const duration = Number(video.duration)
-      cleanup()
-      if (Number.isFinite(duration) && duration > 0) {
-        resolve(duration)
-        return
-      }
-      reject(new Error("The selected video does not expose a readable duration."))
-    }
-    video.onerror = () => {
-      cleanup()
-      reject(new Error("Could not read the selected video's duration."))
-    }
+    video.addEventListener("loadedmetadata", handleDurationCandidates)
+    video.addEventListener("durationchange", handleDurationCandidates)
+    video.addEventListener("timeupdate", handleSeekResolution)
+    video.addEventListener("seeked", handleSeekResolution)
+    video.addEventListener("error", handleError)
+
+    timeoutId = setTimeout(() => {
+      settle(() => reject(new Error("Timed out while reading video duration.")))
+    }, timeoutMs)
+
     video.src = objectUrl
   })
 }
@@ -159,7 +247,7 @@ export function AddVideoModal({ open, onOpenChange, locations, initialLocationId
       .catch((error) => {
         if (isCancelled) return
         setDetectedDurationSeconds(null)
-        setDurationError(error instanceof Error ? error.message : "Could not read the video duration.")
+        setDurationError(error instanceof Error ? AUTO_DURATION_GUIDANCE_MESSAGE : AUTO_DURATION_GUIDANCE_MESSAGE)
       })
       .finally(() => {
         if (!isCancelled) {
@@ -224,7 +312,7 @@ export function AddVideoModal({ open, onOpenChange, locations, initialLocationId
 
     if (e.dataTransfer.files?.[0]) {
       const file = e.dataTransfer.files[0]
-      if (file.type === "video/mp4" || file.type === "video/x-msvideo" || file.name.toLowerCase().endsWith(".avi")) {
+      if (isAcceptedVideoFile(file)) {
         setSelectedFile(file)
       }
     }
