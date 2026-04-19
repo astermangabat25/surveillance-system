@@ -3699,6 +3699,8 @@ def test_dashboard_traffic_by_location_returns_gate_overlays_and_window_metadata
     ten_oclock_bucket = next(point for point in payload["series"] if point["time"] == "10:00")
     assert ten_oclock_bucket["Gate 2.9"] == 2
     assert ten_oclock_bucket["Gate 3"] == 1
+    assert ten_oclock_bucket["Gate 2.9__los"] in {"A", "B", "C", "D", "E", "F", None}
+    assert ten_oclock_bucket["Gate 3__los"] in {"A", "B", "C", "D", "E", "F", None}
     assert "cumulativeUniquePedestrians" in ten_oclock_bucket
 
 

@@ -2315,17 +2315,21 @@ def _traffic_series_from_samples(
     first_seen_by_track: dict[str, tuple[datetime, str]],
     root_window_start: datetime,
     location_names: list[str],
-) -> list[dict[str, Union[float, int, str]]]:
+    active_locations_by_name: Optional[dict[str, dict[str, Any]]] = None,
+) -> list[dict[str, Union[float, int, str, None]]]:
     if not buckets:
         return []
 
-    series: list[dict[str, Union[float, int, str]]] = [
+    include_location_los = bool(active_locations_by_name)
+
+    series: list[dict[str, Union[float, int, str, None]]] = [
         {
             "id": bucket_start.isoformat(),
             "time": label,
             "cumulativeUniquePedestrians": 0,
             "averageVisiblePedestrians": 0.0,
             **{location: 0 for location in location_names},
+            **({f"{location}__los": None for location in location_names} if include_location_los else {}),
         }
         for label, bucket_start in buckets
     ]
@@ -2337,6 +2341,11 @@ def _traffic_series_from_samples(
     sample_counts = [0 for _ in series]
     first_seen_counts = [0 for _ in series]
     first_seen_counts_by_location = {location: [0 for _ in series] for location in location_names}
+    location_visible_totals = {location: [0.0 for _ in series] for location in location_names}
+    location_sample_counts = {location: [0 for _ in series] for location in location_names}
+    location_light_totals = {location: [0.0 for _ in series] for location in location_names}
+    location_moderate_totals = {location: [0.0 for _ in series] for location in location_names}
+    location_heavy_totals = {location: [0.0 for _ in series] for location in location_names}
 
     for sample in samples:
         observed_at = sample["observedAt"]
@@ -2347,6 +2356,18 @@ def _traffic_series_from_samples(
             continue
         visible_totals[bucket_index] += float(sample["visibleCount"])
         sample_counts[bucket_index] += 1
+
+        sample_location = str(sample.get("location") or "")
+        if sample_location not in location_sample_counts:
+            continue
+
+        sample_visible_count = float(sample.get("visibleCount") or 0)
+        sample_class_counts = sample.get("classCounts") or {}
+        location_visible_totals[sample_location][bucket_index] += sample_visible_count
+        location_sample_counts[sample_location][bucket_index] += 1
+        location_light_totals[sample_location][bucket_index] += float(sample_class_counts.get(0) or 0)
+        location_moderate_totals[sample_location][bucket_index] += float(sample_class_counts.get(1) or 0)
+        location_heavy_totals[sample_location][bucket_index] += float(sample_class_counts.get(2) or 0)
 
     baseline_unique_total = 0
     baseline_unique_by_location = {location: 0 for location in location_names}
@@ -2373,6 +2394,26 @@ def _traffic_series_from_samples(
         for location in location_names:
             running_total_by_location[location] += first_seen_counts_by_location[location][index]
             point[location] = running_total_by_location[location]
+
+            if not include_location_los:
+                continue
+
+            location_details = (active_locations_by_name or {}).get(location)
+            if location_details is None or location_sample_counts[location][index] == 0:
+                point[f"{location}__los"] = None
+                continue
+
+            average_visible = location_visible_totals[location][index] / location_sample_counts[location][index]
+            rounded_visible = max(1, int(round(average_visible)))
+            occlusion_value = 0.0
+            if location_visible_totals[location][index] > 0:
+                occlusion_value = (
+                    (location_light_totals[location][index] * PTSI_OCCLUSION_WEIGHTS[0])
+                    + (location_moderate_totals[location][index] * PTSI_OCCLUSION_WEIGHTS[1])
+                    + (location_heavy_totals[location][index] * PTSI_OCCLUSION_WEIGHTS[2])
+                ) / (3.0 * location_visible_totals[location][index])
+
+            point[f"{location}__los"] = _ptsi_score_breakdown(rounded_visible, location_details, occlusion_value).get("los")
 
     return series
 
@@ -2822,6 +2863,7 @@ def dashboard_traffic(
         first_seen_by_track,
         root_window_start,
         active_location_names,
+        None,
     )
 
     if buckets:
@@ -2863,7 +2905,10 @@ def dashboard_traffic_by_location(
     root_window_start, _root_window_end, _root_bucket_minutes = _resolve_root_window(resolved_date, time_range, observation_times, start_time)
     buckets, bucket_span, bucket_meta = _build_bucket_plan(resolved_date, time_range, observation_times, focus_time, zoom_level, start_time)
     active_location_ids = _active_location_ids(videos)
-    active_location_names = [location["name"] for location in state["locations"] if location["id"] in active_location_ids]
+    active_locations_by_name = {
+        location["name"]: location for location in state["locations"] if location["id"] in active_location_ids
+    }
+    active_location_names = list(active_locations_by_name.keys())
     series = _traffic_series_from_samples(
         buckets,
         bucket_span,
@@ -2871,6 +2916,7 @@ def dashboard_traffic_by_location(
         first_seen_by_track,
         root_window_start,
         active_location_names,
+        active_locations_by_name,
     )
 
     return {

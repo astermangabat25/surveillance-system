@@ -45,6 +45,22 @@ interface PedestrianChartProps {
 
 const SERIES_COLORS = ["#22C55E", "#06B6D4", "#3B82F6", "#F59E0B", "#A855F7"]
 const RESERVED_SERIES_KEYS = new Set(["id", "time", "cumulativeUniquePedestrians", "averageVisiblePedestrians", "los"])
+const LOS_COLOR_MAP: Record<string, string> = {
+  A: "#22C55E",
+  B: "#84CC16",
+  C: "#EAB308",
+  D: "#F97316",
+  E: "#EF4444",
+  F: "#B91C1C",
+}
+const LOS_SEVERITY_ORDER: Record<string, number> = {
+  A: 0,
+  B: 1,
+  C: 2,
+  D: 3,
+  E: 4,
+  F: 5,
+}
 
 const LOS_LABEL_BY_RANK: Record<number, string> = {
   1: "A",
@@ -53,6 +69,12 @@ const LOS_LABEL_BY_RANK: Record<number, string> = {
   4: "D",
   5: "E",
   6: "F",
+}
+
+type LineDotProps = {
+  cx?: number
+  cy?: number
+  payload?: TrafficPoint
 }
 
 function formatTimeRangeLabel(timeRange: string) {
@@ -149,12 +171,38 @@ export function PedestrianChart({
   const locationSeries = Array.from(
     new Set([
       ...locationTotals.map((item) => item.location),
-      ...data.flatMap((point) => Object.keys(point).filter((key) => !RESERVED_SERIES_KEYS.has(key))),
+      ...data.flatMap((point) =>
+        Object.keys(point).filter((key) => !RESERVED_SERIES_KEYS.has(key) && !key.endsWith("__los")),
+      ),
     ]),
   ).map((location, index) => ({
     key: location,
     color: SERIES_COLORS[index % SERIES_COLORS.length],
   }))
+
+  const lineColorBySeriesKey = Object.fromEntries(
+    locationSeries.map((series) => {
+      let worstLos: string | null = null
+      let worstRank = -1
+
+      for (const point of data) {
+        const losValue = point[`${series.key}__los`]
+        if (typeof losValue !== "string") {
+          continue
+        }
+        const rank = LOS_SEVERITY_ORDER[losValue]
+        if (rank == null) {
+          continue
+        }
+        if (rank > worstRank) {
+          worstRank = rank
+          worstLos = losValue
+        }
+      }
+
+      return [series.key, (worstLos && LOS_COLOR_MAP[worstLos]) || series.color]
+    }),
+  )
 
   const showLocationBreakdown = metricKey === "cumulativeUniquePedestrians" && locationSeries.length > 0
   const isLosMetric = metricKey === "los"
@@ -293,10 +341,18 @@ export function PedestrianChart({
                       type="monotone"
                       dataKey={series.key}
                       name={series.key}
-                      stroke={series.color}
+                      stroke={lineColorBySeriesKey[series.key] ?? series.color}
                       strokeWidth={2.5}
-                      dot={false}
-                      activeDot={{ r: 4, fill: series.color }}
+                      dot={(props: LineDotProps) => {
+                        const losValue = props?.payload?.[`${series.key}__los`]
+                        const pointColor = typeof losValue === "string" ? (LOS_COLOR_MAP[losValue] ?? series.color) : series.color
+                        return <circle cx={props.cx} cy={props.cy} r={3} fill={pointColor} stroke={pointColor} />
+                      }}
+                      activeDot={(props: LineDotProps) => {
+                        const losValue = props?.payload?.[`${series.key}__los`]
+                        const pointColor = typeof losValue === "string" ? (LOS_COLOR_MAP[losValue] ?? series.color) : series.color
+                        return <circle cx={props.cx} cy={props.cy} r={4} fill={pointColor} stroke={pointColor} />
+                      }}
                       connectNulls
                     />
                   ))}
