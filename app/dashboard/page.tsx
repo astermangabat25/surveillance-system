@@ -84,6 +84,7 @@ export default function DashboardPage() {
   const [focusTime, setFocusTime] = useState<string | undefined>(undefined)
   const [zoomLevel, setZoomLevel] = useState(0)
   const [vehicleChartType, setVehicleChartType] = useState<"line" | "bar">("line")
+  const [losChartType, setLosChartType] = useState<"line" | "bar">("bar")
   const [inOutChartType, setInOutChartType] = useState<"line" | "bar">("line")
   const [modelDialogOpen, setModelDialogOpen] = useState(false)
   const [modelFile, setModelFile] = useState<File | null>(null)
@@ -628,6 +629,8 @@ export default function DashboardPage() {
               loading={dashboardLoading}
               onTimeSelect={handleAnalyticsZoom}
               onResetZoom={handleResetZoom}
+              chartType={losChartType}
+              onChartTypeChange={setLosChartType}
             />
             <OcclusionTrendsChart
               timeRange={timeRange}

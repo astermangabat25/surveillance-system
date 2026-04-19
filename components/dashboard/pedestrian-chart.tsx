@@ -206,7 +206,7 @@ export function PedestrianChart({
 
   const showLocationBreakdown = metricKey === "cumulativeUniquePedestrians" && locationSeries.length > 0
   const isLosMetric = metricKey === "los"
-  const chartTypeSelectionEnabled = !isLosMetric && typeof onChartTypeChange === "function" && typeof chartType === "string"
+  const chartTypeSelectionEnabled = typeof onChartTypeChange === "function" && typeof chartType === "string"
 
   const totals = locationTotals.map((item, index) => ({
     location: item.location,
