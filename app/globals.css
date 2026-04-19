@@ -126,6 +126,13 @@
   }
 }
 
+/* Leaflet tiles break under global img max-width rules (Tailwind preflight). */
+.leaflet-container .leaflet-tile,
+.leaflet-container .leaflet-marker-icon,
+.leaflet-container .leaflet-marker-shadow {
+  max-width: none !important;
+}
+
 /* Soft shadow utilities for elevated cards */
 .shadow-elevated {
   box-shadow: 0 4px 24px -4px rgba(0, 0, 0, 0.4), 0 2px 8px -2px rgba(0, 0, 0, 0.3);

@@ -89,6 +89,8 @@ export function CampusOsmMap({ selectedDate, className }: CampusOsmMapProps) {
 
     let map: LeafletMap | null = null
     let isCancelled = false
+    let resizeObserver: ResizeObserver | null = null
+    let delayedInvalidateTimer: number | null = null
 
     const mapBounds: LatLngBoundsExpression = [
       [CAMPUS_MAP_BOUNDS.south, CAMPUS_MAP_BOUNDS.west],
@@ -122,6 +124,22 @@ export function CampusOsmMap({ selectedDate, className }: CampusOsmMapProps) {
       } else {
         map.fitBounds(mapBounds, { padding: [12, 12] })
       }
+
+      const safelyInvalidateSize = () => {
+        if (!map || isCancelled) {
+          return
+        }
+
+        map.invalidateSize()
+      }
+
+      requestAnimationFrame(safelyInvalidateSize)
+      delayedInvalidateTimer = window.setTimeout(safelyInvalidateSize, 180)
+
+      resizeObserver = new ResizeObserver(() => {
+        safelyInvalidateSize()
+      })
+      resizeObserver.observe(mapHostRef.current)
 
       LANDMARKS.forEach((landmark) => {
         const los = resolveLos(selectedDate, landmark.id)
@@ -164,12 +182,16 @@ export function CampusOsmMap({ selectedDate, className }: CampusOsmMapProps) {
 
     return () => {
       isCancelled = true
+      if (delayedInvalidateTimer !== null) {
+        window.clearTimeout(delayedInvalidateTimer)
+      }
+      resizeObserver?.disconnect()
       map?.remove()
     }
   }, [dateLabel, selectedDate])
 
   return (
-    <div className={className ?? "h-72 w-full rounded-xl"}>
+    <div className={`${className ?? "h-72 w-full rounded-xl"} relative overflow-hidden`}>
       <div ref={mapHostRef} className="h-full w-full" />
     </div>
   )
