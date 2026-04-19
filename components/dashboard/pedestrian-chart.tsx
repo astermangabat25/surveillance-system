@@ -40,6 +40,7 @@ interface PedestrianChartProps {
   onResetZoom?: () => void
   chartType?: "line" | "bar"
   onChartTypeChange?: (value: "line" | "bar") => void
+  legendPosition?: "top" | "bottom"
 }
 
 const SERIES_COLORS = ["#22C55E", "#06B6D4", "#3B82F6", "#F59E0B", "#A855F7"]
@@ -142,6 +143,7 @@ export function PedestrianChart({
   onResetZoom,
   chartType,
   onChartTypeChange,
+  legendPosition = "bottom",
 }: PedestrianChartProps) {
   const timeLabelsById = new Map(data.map((point) => [point.id, point.time]))
   const locationSeries = Array.from(
@@ -181,6 +183,22 @@ export function PedestrianChart({
       onTimeSelect(candidate)
     }
   }
+
+  const chartMargin = legendPosition === "top"
+    ? { top: 36, right: 30, left: 0, bottom: 0 }
+    : { top: 10, right: 30, left: 0, bottom: 0 }
+
+  const legendProps = legendPosition === "top"
+    ? {
+        verticalAlign: "top" as const,
+        align: "center" as const,
+        wrapperStyle: { paddingBottom: "8px" },
+      }
+    : {
+        verticalAlign: "bottom" as const,
+        align: "center" as const,
+        wrapperStyle: { paddingTop: "20px" },
+      }
 
   return (
     <div className="rounded-3xl border border-border bg-card p-6 shadow-elevated">
@@ -228,7 +246,7 @@ export function PedestrianChart({
           <ResponsiveContainer width="100%" height="100%">
             {showLocationBreakdown ? (
               chartType === "bar" ? (
-                <BarChart data={data} margin={{ top: 10, right: 30, left: 0, bottom: 0 }} onClick={handleChartClick}>
+                <BarChart data={data} margin={chartMargin} onClick={handleChartClick}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#27272A" vertical={false} />
                   <XAxis
                     dataKey="id"
@@ -245,13 +263,13 @@ export function PedestrianChart({
                     label={{ value: metricLabel, angle: -90, position: "insideLeft", fill: "#71717A", fontSize: 12 }}
                   />
                   <Tooltip content={<CustomTooltip metricKey={metricKey} />} />
-                  <Legend wrapperStyle={{ paddingTop: "20px" }} formatter={(value) => <span className="text-sm text-foreground">{value}</span>} />
+                  <Legend {...legendProps} formatter={(value) => <span className="text-sm text-foreground">{value}</span>} />
                   {locationSeries.map((series) => (
                     <Bar key={series.key} dataKey={series.key} name={series.key} fill={series.color} radius={[4, 4, 0, 0]} />
                   ))}
                 </BarChart>
               ) : (
-                <LineChart data={data} margin={{ top: 10, right: 30, left: 0, bottom: 0 }} onClick={handleChartClick}>
+                <LineChart data={data} margin={chartMargin} onClick={handleChartClick}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#27272A" vertical={false} />
                   <XAxis
                     dataKey="id"
@@ -268,7 +286,7 @@ export function PedestrianChart({
                     label={{ value: metricLabel, angle: -90, position: "insideLeft", fill: "#71717A", fontSize: 12 }}
                   />
                   <Tooltip content={<CustomTooltip metricKey={metricKey} />} />
-                  <Legend wrapperStyle={{ paddingTop: "20px" }} formatter={(value) => <span className="text-sm text-foreground">{value}</span>} />
+                  <Legend {...legendProps} formatter={(value) => <span className="text-sm text-foreground">{value}</span>} />
                   {locationSeries.map((series) => (
                     <Line
                       key={series.key}
@@ -286,7 +304,7 @@ export function PedestrianChart({
               )
             ) : (
               chartType === "bar" ? (
-                <BarChart data={data} margin={{ top: 10, right: 30, left: 0, bottom: 0 }} onClick={handleChartClick}>
+                <BarChart data={data} margin={chartMargin} onClick={handleChartClick}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#27272A" vertical={false} />
                   <XAxis
                     dataKey="id"
@@ -306,11 +324,11 @@ export function PedestrianChart({
                     label={{ value: metricLabel, angle: -90, position: "insideLeft", fill: "#71717A", fontSize: 12 }}
                   />
                   <Tooltip content={<CustomTooltip metricKey={metricKey} />} />
-                  <Legend wrapperStyle={{ paddingTop: "20px" }} formatter={(value) => <span className="text-sm text-foreground">{value}</span>} />
+                  <Legend {...legendProps} formatter={(value) => <span className="text-sm text-foreground">{value}</span>} />
                   <Bar dataKey={metricKey} name={metricLabel} fill={seriesColor} radius={[4, 4, 0, 0]} cursor={canZoomIn ? "pointer" : "default"} />
                 </BarChart>
               ) : chartType === "line" ? (
-                <LineChart data={data} margin={{ top: 10, right: 30, left: 0, bottom: 0 }} onClick={handleChartClick}>
+                <LineChart data={data} margin={chartMargin} onClick={handleChartClick}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#27272A" vertical={false} />
                   <XAxis
                     dataKey="id"
@@ -330,7 +348,7 @@ export function PedestrianChart({
                     label={{ value: metricLabel, angle: -90, position: "insideLeft", fill: "#71717A", fontSize: 12 }}
                   />
                   <Tooltip content={<CustomTooltip metricKey={metricKey} />} />
-                  <Legend wrapperStyle={{ paddingTop: "20px" }} formatter={(value) => <span className="text-sm text-foreground">{value}</span>} />
+                  <Legend {...legendProps} formatter={(value) => <span className="text-sm text-foreground">{value}</span>} />
                   <Line
                     type="monotone"
                     dataKey={metricKey}
@@ -343,7 +361,7 @@ export function PedestrianChart({
                   />
                 </LineChart>
               ) : (
-                <AreaChart data={data} margin={{ top: 10, right: 30, left: 0, bottom: 0 }} onClick={handleChartClick}>
+                <AreaChart data={data} margin={chartMargin} onClick={handleChartClick}>
                   <defs>
                     <linearGradient id={`${metricKey}-gradient`} x1="0" y1="0" x2="0" y2="1">
                       <stop offset="5%" stopColor={seriesColor} stopOpacity={0.3} />
@@ -369,7 +387,7 @@ export function PedestrianChart({
                     label={{ value: metricLabel, angle: -90, position: "insideLeft", fill: "#71717A", fontSize: 12 }}
                   />
                   <Tooltip content={<CustomTooltip metricKey={metricKey} />} />
-                  <Legend wrapperStyle={{ paddingTop: "20px" }} formatter={(value) => <span className="text-sm text-foreground">{value}</span>} />
+                  <Legend {...legendProps} formatter={(value) => <span className="text-sm text-foreground">{value}</span>} />
                   <Area
                     type="linear"
                     dataKey={metricKey}

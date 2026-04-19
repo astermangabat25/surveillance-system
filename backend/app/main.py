@@ -488,6 +488,17 @@ def get_dashboard_traffic(
     return store.dashboard_traffic(date, timeRange, focusTime, zoomLevel, startTime)
 
 
+@app.get("/api/dashboard/traffic-by-location", response_model=schemas.TrafficByLocationResponse)
+def get_dashboard_traffic_by_location(
+    date: Optional[str] = None,
+    timeRange: str = "12h",
+    focusTime: Optional[str] = None,
+    startTime: Optional[str] = None,
+    zoomLevel: int = 0,
+) -> dict[str, object]:
+    return store.dashboard_traffic_by_location(date, timeRange, focusTime, zoomLevel, startTime)
+
+
 @app.get("/api/dashboard/los", response_model=schemas.TrafficResponse)
 def get_dashboard_los(
     date: Optional[str] = None,

@@ -3609,6 +3609,99 @@ def test_dashboard_traffic_returns_per_location_cumulative_series(monkeypatch, t
     assert ten_fifteen_bucket["Gate 3"] == 1
 
 
+def test_dashboard_traffic_by_location_returns_gate_overlays_and_window_metadata(monkeypatch, tmp_path: Path) -> None:
+    configure_temp_storage(monkeypatch, tmp_path)
+
+    state = store.seed_state()
+    state["videos"] = [
+        {
+            "id": "video-edsa-1",
+            "locationId": "gate-2-9",
+            "location": "Gate 2.9",
+            "timestamp": "10:00",
+            "date": "2026-03-17",
+            "startTime": "10:00",
+            "endTime": "10:10",
+            "gpsLat": 14.6397,
+            "gpsLng": 121.0775,
+            "pedestrianCount": 2,
+            "rawPath": None,
+            "processedPath": None,
+        },
+        {
+            "id": "video-kostka-1",
+            "locationId": "gate-3",
+            "location": "Gate 3",
+            "timestamp": "10:20",
+            "date": "2026-03-17",
+            "startTime": "10:20",
+            "endTime": "10:30",
+            "gpsLat": 14.6390,
+            "gpsLng": 121.0781,
+            "pedestrianCount": 1,
+            "rawPath": None,
+            "processedPath": None,
+        },
+    ]
+    state["events"] = [
+        {
+            "id": "event-edsa-1",
+            "type": "detection",
+            "location": "Gate 2.9",
+            "timestamp": "10:01:00",
+            "description": "Pedestrian ID #1 detected at frame 10",
+            "videoId": "video-edsa-1",
+            "pedestrianId": 1,
+            "frame": 10,
+            "offsetSeconds": 1.0,
+        },
+        {
+            "id": "event-edsa-2",
+            "type": "detection",
+            "location": "Gate 2.9",
+            "timestamp": "10:05:00",
+            "description": "Pedestrian ID #2 detected at frame 20",
+            "videoId": "video-edsa-1",
+            "pedestrianId": 2,
+            "frame": 20,
+            "offsetSeconds": 5.0,
+        },
+        {
+            "id": "event-kostka-1",
+            "type": "detection",
+            "location": "Gate 3",
+            "timestamp": "10:21:00",
+            "description": "Pedestrian ID #1 detected at frame 15",
+            "videoId": "video-kostka-1",
+            "pedestrianId": 1,
+            "frame": 15,
+            "offsetSeconds": 1.0,
+        },
+    ]
+    store.save_state(state)
+
+    with TestClient(main.app) as client:
+        response = client.get(
+            "/api/dashboard/traffic-by-location",
+            params={"date": "2026-03-17", "timeRange": "whole-day"},
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["timeRange"] == "whole-day"
+    assert payload["bucketMinutes"] == 60
+    assert payload["zoomLevel"] == 0
+    assert payload["windowStart"] == "00:00"
+    assert payload["windowEnd"] == "24:00"
+    assert payload["canZoomIn"] is True
+    assert payload["isDrilldown"] is False
+
+    ten_oclock_bucket = next(point for point in payload["series"] if point["time"] == "10:00")
+    assert ten_oclock_bucket["Gate 2.9"] == 2
+    assert ten_oclock_bucket["Gate 3"] == 1
+    assert "cumulativeUniquePedestrians" in ten_oclock_bucket
+
+
 def test_dashboard_los_without_location_id_returns_empty_payload(monkeypatch, tmp_path: Path) -> None:
     configure_temp_storage(monkeypatch, tmp_path)
 

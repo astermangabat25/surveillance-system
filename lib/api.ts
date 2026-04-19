@@ -123,6 +123,8 @@ export interface TrafficResponse {
   locationTotals: LocationTotal[]
 }
 
+export type TrafficByLocationResponse = Omit<TrafficResponse, "locationTotals">
+
 export interface PTSITrendResponse {
   timeRange: string
   series: TrafficPoint[]
@@ -556,6 +558,16 @@ export function getDashboardSummary(date?: string) {
 
 export function getDashboardTraffic(date?: string, timeRange = "12h", focusTime?: string, zoomLevel = 0, startTime?: string) {
   return request<TrafficResponse>(withQuery("/api/dashboard/traffic", {
+    date,
+    timeRange,
+    focusTime,
+    startTime,
+    zoomLevel: zoomLevel > 0 ? String(zoomLevel) : undefined,
+  }))
+}
+
+export function getDashboardTrafficByLocation(date?: string, timeRange = "12h", focusTime?: string, zoomLevel = 0, startTime?: string) {
+  return request<TrafficByLocationResponse>(withQuery("/api/dashboard/traffic-by-location", {
     date,
     timeRange,
     focusTime,

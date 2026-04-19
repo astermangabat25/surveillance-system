@@ -35,6 +35,7 @@ import {
   getDashboardOcclusionTrends,
   getDashboardSummary,
   getDashboardTraffic,
+  getDashboardTrafficByLocation,
   getLocations,
   uploadInferenceRequirement,
   uploadModel,
@@ -47,6 +48,7 @@ import {
   type PTSIMapResponse,
   type PTSITrendResponse,
   type TrafficResponse,
+  type TrafficByLocationResponse,
 } from "@/lib/api"
 
 const TIME_RANGE_OPTIONS = [
@@ -89,6 +91,7 @@ export default function DashboardPage() {
   const [requirementType, setRequirementType] = useState<InferenceRequirementType>("infer-config")
   const [summary, setSummary] = useState<DashboardSummary | null>(null)
   const [traffic, setTraffic] = useState<TrafficResponse | null>(null)
+  const [trafficByLocation, setTrafficByLocation] = useState<TrafficByLocationResponse | null>(null)
   const [losTraffic, setLosTraffic] = useState<TrafficResponse | null>(null)
   const [occlusionTrends, setOcclusionTrends] = useState<PTSITrendResponse | null>(null)
   const [occlusion, setOcclusion] = useState<PTSIMapResponse | null>(null)
@@ -119,9 +122,10 @@ export default function DashboardPage() {
 
     setDashboardLoading(true)
     try {
-      const [summaryResponse, trafficResponse, losTrafficResponse, occlusionTrendsResponse, occlusionResponse, synthesisResponse] = await Promise.all([
+      const [summaryResponse, trafficResponse, trafficByLocationResponse, losTrafficResponse, occlusionTrendsResponse, occlusionResponse, synthesisResponse] = await Promise.all([
         getDashboardSummary(selectedDate),
         getDashboardTraffic(selectedDate, timeRange, focusTime, zoomLevel, startTime),
+        getDashboardTrafficByLocation(selectedDate, timeRange, focusTime, zoomLevel, startTime),
         getDashboardLOS(selectedDate, timeRange, focusTime, zoomLevel, selectedLocationId || undefined, startTime),
         getDashboardOcclusionTrends(selectedDate, timeRange, focusTime, zoomLevel, startTime),
         getDashboardOcclusion(selectedDate, timeRange, startTime),
@@ -130,6 +134,7 @@ export default function DashboardPage() {
 
       setSummary(summaryResponse)
       setTraffic(trafficResponse)
+      setTrafficByLocation(trafficByLocationResponse)
       setLosTraffic(losTrafficResponse)
       setOcclusionTrends(occlusionTrendsResponse)
       setOcclusion(occlusionResponse)
@@ -138,6 +143,7 @@ export default function DashboardPage() {
     } catch (error) {
       setSummary(null)
       setTraffic(null)
+      setTrafficByLocation(null)
       setLosTraffic(null)
       setOcclusionTrends(null)
       setOcclusion(null)
@@ -308,68 +314,74 @@ export default function DashboardPage() {
 
   return (
     <div className="flex h-full flex-col">
-      <header className="flex items-center justify-between border-b border-border bg-card/50 px-6 py-4 backdrop-blur-sm">
-        <div>
-          <h1 className="text-xl font-semibold text-foreground">System Analytics Dashboard</h1>
-          <p className="text-sm text-muted-foreground">Real-time pedestrian tracking metrics</p>
-        </div>
+      <header className="border-b border-border bg-card/50 px-4 py-4 backdrop-blur-sm sm:px-6">
+        <div className="mx-auto flex w-full max-w-7xl flex-col gap-4">
+          <div className="shrink-0">
+            <h1 className="text-xl font-semibold text-foreground">System Analytics Dashboard</h1>
+            <p className="text-sm text-muted-foreground">Real-time pedestrian tracking metrics</p>
+          </div>
 
-        <div className="flex items-center gap-3">
-          <FootageDatePicker
-            value={selectedDate}
-            onChange={handleDateChange}
-            highlightedDates={footageDates}
-            placeholder="Select date"
-          />
+          <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_auto] xl:items-end xl:gap-4">
+            <div className="grid w-full grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+              <div className="w-full min-w-0 xl:max-w-[15rem]">
+                <FootageDatePicker
+                  value={selectedDate}
+                  onChange={handleDateChange}
+                  highlightedDates={footageDates}
+                  placeholder="Select date"
+                />
+              </div>
 
-          <Select value={timeRange} onValueChange={handleTimeRangeChange}>
-            <SelectTrigger className="w-44 rounded-2xl border-border bg-secondary text-foreground">
-              <Clock className="mr-2 h-4 w-4 text-muted-foreground" />
-              <SelectValue placeholder="Select time range" />
-            </SelectTrigger>
-            <SelectContent className="rounded-xl border-border bg-popover">
-              {TIME_RANGE_OPTIONS.map((option) => (
-                <SelectItem key={option.value} value={option.value} className="rounded-lg text-foreground">
-                  {option.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+              <Select value={timeRange} onValueChange={handleTimeRangeChange}>
+                <SelectTrigger className="w-full rounded-2xl border-border bg-secondary text-foreground xl:max-w-[12rem]">
+                  <Clock className="mr-2 h-4 w-4 text-muted-foreground" />
+                  <SelectValue placeholder="Select time range" />
+                </SelectTrigger>
+                <SelectContent className="rounded-xl border-border bg-popover">
+                  {TIME_RANGE_OPTIONS.map((option) => (
+                    <SelectItem key={option.value} value={option.value} className="rounded-lg text-foreground">
+                      {option.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
 
-          <Select value={startTime} onValueChange={handleStartTimeChange}>
-            <SelectTrigger className="w-36 rounded-2xl border-border bg-secondary text-foreground">
-              <SelectValue placeholder="Start time" />
-            </SelectTrigger>
-            <SelectContent className="max-h-80 rounded-xl border-border bg-popover">
-              {START_TIME_OPTIONS.map((option) => (
-                <SelectItem key={option.value} value={option.value} className="rounded-lg text-foreground">
-                  {option.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+              <Select value={startTime} onValueChange={handleStartTimeChange}>
+                <SelectTrigger className="w-full rounded-2xl border-border bg-secondary text-foreground xl:max-w-[11rem]">
+                  <SelectValue placeholder="Start time" />
+                </SelectTrigger>
+                <SelectContent className="max-h-80 rounded-xl border-border bg-popover">
+                  {START_TIME_OPTIONS.map((option) => (
+                    <SelectItem key={option.value} value={option.value} className="rounded-lg text-foreground">
+                      {option.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
 
-          <Select value={selectedLocationId} onValueChange={setSelectedLocationId}>
-            <SelectTrigger className="w-44 rounded-2xl border-border bg-secondary text-foreground">
-              <SelectValue placeholder="Select location" />
-            </SelectTrigger>
-            <SelectContent className="rounded-xl border-border bg-popover">
-              {locations.map((location) => (
-                <SelectItem key={location.id} value={location.id} className="rounded-lg text-foreground">
-                  {location.name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+              <Select value={selectedLocationId} onValueChange={setSelectedLocationId}>
+                <SelectTrigger className="w-full rounded-2xl border-border bg-secondary text-foreground xl:max-w-[14rem]">
+                  <SelectValue placeholder="Select location" />
+                </SelectTrigger>
+                <SelectContent className="rounded-xl border-border bg-popover">
+                  {locations.map((location) => (
+                    <SelectItem key={location.id} value={location.id} className="rounded-lg text-foreground">
+                      {location.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
 
-          <Dialog open={modelDialogOpen} onOpenChange={setModelDialogOpen}>
-            <DialogTrigger asChild>
-              <Button variant="outline" className="rounded-2xl border-border px-4 text-foreground hover:bg-secondary">
-                <Settings2 className="mr-2 h-4 w-4" />
-                Edit Model
-              </Button>
-            </DialogTrigger>
-            <DialogContent className="max-w-md rounded-3xl border-border bg-card">
+            <div className="flex w-full flex-col gap-3 sm:flex-row sm:flex-wrap sm:justify-end xl:w-auto xl:flex-nowrap xl:justify-end">
+              <Dialog open={modelDialogOpen} onOpenChange={setModelDialogOpen}>
+                <DialogTrigger asChild>
+                  <Button variant="outline" className="w-full rounded-2xl border-border px-4 text-foreground hover:bg-secondary sm:w-auto sm:min-w-[9.25rem]">
+                    <Settings2 className="mr-2 h-4 w-4" />
+                    Edit Model
+                  </Button>
+                </DialogTrigger>
+                <DialogContent className="max-w-md rounded-3xl border-border bg-card">
               <DialogHeader>
                 <DialogTitle className="text-foreground">Detection Model Settings</DialogTitle>
                 <DialogDescription className="text-muted-foreground">
@@ -506,32 +518,34 @@ export default function DashboardPage() {
                   )}
                 </Button>
               </div>
-            </DialogContent>
-          </Dialog>
+                </DialogContent>
+              </Dialog>
 
-          <Button
-            variant="outline"
-            className="rounded-2xl border-border px-4 text-foreground hover:bg-secondary"
-            onClick={() => {
-              void loadDashboard()
-              void loadModelInfo()
-              void loadFootageDates()
-            }}
-          >
-            <RefreshCw className={`mr-2 h-4 w-4 ${dashboardLoading || modelLoading ? "animate-spin" : ""}`} />
-            Refresh
-          </Button>
+              <Button
+                variant="outline"
+                className="w-full rounded-2xl border-border px-4 text-foreground hover:bg-secondary sm:w-auto sm:min-w-[9.25rem]"
+                onClick={() => {
+                  void loadDashboard()
+                  void loadModelInfo()
+                  void loadFootageDates()
+                }}
+              >
+                <RefreshCw className={`mr-2 h-4 w-4 ${dashboardLoading || modelLoading ? "animate-spin" : ""}`} />
+                Refresh
+              </Button>
 
-          <Button
-            className="rounded-2xl bg-accent px-4 text-accent-foreground shadow-elevated-sm hover:bg-accent/90"
-            onClick={() => {
-              void handleExportReport()
-            }}
-            disabled={reportExporting}
-          >
-            {reportExporting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Download className="mr-2 h-4 w-4" />}
-            {reportExporting ? "Exporting..." : "Export Report"}
-          </Button>
+              <Button
+                className="w-full rounded-2xl bg-accent px-4 text-accent-foreground shadow-elevated-sm hover:bg-accent/90 sm:w-auto sm:min-w-[10.5rem]"
+                onClick={() => {
+                  void handleExportReport()
+                }}
+                disabled={reportExporting}
+              >
+                {reportExporting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Download className="mr-2 h-4 w-4" />}
+                {reportExporting ? "Exporting..." : "Export Report"}
+              </Button>
+            </div>
+          </div>
         </div>
       </header>
 
@@ -568,6 +582,27 @@ export default function DashboardPage() {
               onResetZoom={handleResetZoom}
               chartType={vehicleChartType}
               onChartTypeChange={setVehicleChartType}
+            />
+            <PedestrianChart
+              title="Vehicle Count (All gates)"
+              description="Overlapping gate-wise cumulative vehicle count for the selected date and time window."
+              timeRange={timeRange}
+              selectedDate={selectedDate}
+              data={trafficByLocation?.series ?? []}
+              metricKey="cumulativeUniquePedestrians"
+              metricLabel="Vehicle Count"
+              seriesColor="#22C55E"
+              bucketMinutes={trafficByLocation?.bucketMinutes ?? 60}
+              zoomLevel={trafficByLocation?.zoomLevel ?? 0}
+              canZoomIn={trafficByLocation?.canZoomIn ?? false}
+              focusTime={trafficByLocation?.focusTime}
+              windowStart={trafficByLocation?.windowStart}
+              windowEnd={trafficByLocation?.windowEnd}
+              loading={dashboardLoading}
+              onTimeSelect={handleAnalyticsZoom}
+              onResetZoom={handleResetZoom}
+              chartType="line"
+              legendPosition="top"
             />
             <PedestrianChart
               title="LOS"

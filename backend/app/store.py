@@ -2846,6 +2846,40 @@ def dashboard_traffic(
     }
 
 
+def dashboard_traffic_by_location(
+    date: Optional[str] = None,
+    time_range: str = "12h",
+    focus_time: Optional[str] = None,
+    zoom_level: int = 0,
+    start_time: Optional[str] = None,
+) -> dict[str, Any]:
+    state, resolved_date, videos, events = _filtered_dashboard_records(date)
+    pedestrian_tracks = _filtered_pedestrian_tracks(state, videos)
+    samples, first_seen_by_track = _build_analytics_samples(videos, events, pedestrian_tracks)
+    observation_times = [sample["observedAt"] for sample in samples]
+    if not observation_times:
+        observation_times = [timestamp for timestamp in (_observation_time(video) for video in videos) if timestamp is not None]
+
+    root_window_start, _root_window_end, _root_bucket_minutes = _resolve_root_window(resolved_date, time_range, observation_times, start_time)
+    buckets, bucket_span, bucket_meta = _build_bucket_plan(resolved_date, time_range, observation_times, focus_time, zoom_level, start_time)
+    active_location_ids = _active_location_ids(videos)
+    active_location_names = [location["name"] for location in state["locations"] if location["id"] in active_location_ids]
+    series = _traffic_series_from_samples(
+        buckets,
+        bucket_span,
+        samples,
+        first_seen_by_track,
+        root_window_start,
+        active_location_names,
+    )
+
+    return {
+        "timeRange": time_range,
+        "series": series,
+        **bucket_meta,
+    }
+
+
 def dashboard_occlusion_trends(
     date: Optional[str] = None,
     time_range: str = "12h",
