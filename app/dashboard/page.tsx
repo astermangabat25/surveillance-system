@@ -67,9 +67,15 @@ const START_TIME_OPTIONS = Array.from({ length: 48 }, (_, index) => {
   return { value, label: value }
 })
 
+const getCurrentLocalDate = () => {
+  const now = new Date()
+  const timezoneOffsetMilliseconds = now.getTimezoneOffset() * 60 * 1000
+  return new Date(now.getTime() - timezoneOffsetMilliseconds).toISOString().slice(0, 10)
+}
+
 export default function DashboardPage() {
   const { settledUploadsVersion } = useUploadQueue()
-  const [selectedDate, setSelectedDate] = useState("2026-03-15")
+  const [selectedDate, setSelectedDate] = useState(() => getCurrentLocalDate())
   const [timeRange, setTimeRange] = useState("12h")
   const [startTime, setStartTime] = useState("00:00")
   const [hourFilter, setHourFilter] = useState("all")
