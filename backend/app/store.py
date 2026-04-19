@@ -509,6 +509,442 @@ def _portable_video_directory(video_id: str) -> Path:
     return PORTABLE_VIDEOS_DIR / str(video_id)
 
 
+def _read_portable_video_json(video_id: str, filename: str) -> Any:
+    path = _portable_video_directory(video_id) / filename
+    if not path.exists() or not path.is_file():
+        return None
+
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        logger.exception("Failed to read portable artifact %s", path)
+        return None
+
+
+def _portable_video_tracks(video_id: str) -> list[dict[str, Any]]:
+    payload = _read_portable_video_json(video_id, "tracks.json")
+    if not isinstance(payload, list):
+        return []
+
+    compact_tracks: list[dict[str, Any]] = []
+    for fallback_index, track in enumerate(payload):
+        if not isinstance(track, dict):
+            continue
+
+        first_offset = _track_window_offset(track.get("firstOffsetSeconds"))
+        last_offset = _track_window_offset(track.get("lastOffsetSeconds"))
+        if first_offset is None or last_offset is None:
+            continue
+
+        if last_offset < first_offset:
+            first_offset, last_offset = last_offset, first_offset
+
+        compact_tracks.append(
+            {
+                "id": str(track.get("trackId") or track.get("id") or f"{video_id}-portable-track-{fallback_index}"),
+                "pedestrianId": track.get("pedestrianId"),
+                "firstOffsetSeconds": first_offset,
+                "lastOffsetSeconds": last_offset,
+            }
+        )
+
+    return compact_tracks
+
+
+def _portable_video_severity_summary(video_id: str) -> Optional[dict[str, Any]]:
+    payload = _read_portable_video_json(video_id, "timeline.json")
+    if not isinstance(payload, list):
+        return None
+
+    timeline_rows: list[dict[str, Any]] = []
+    for row in payload:
+        if not isinstance(row, dict):
+            continue
+
+        try:
+            offset = max(0, float(row.get("offsetSeconds")))
+        except (TypeError, ValueError):
+            continue
+
+        score_value: Optional[float] = None
+        try:
+            raw_score = row.get("ptsiScore")
+            if raw_score is not None:
+                score_value = float(raw_score)
+        except (TypeError, ValueError):
+            score_value = None
+
+        severity_value = str(row.get("severity") or "").lower()
+        if severity_value not in {"neutral", "light", "moderate", "heavy"}:
+            severity_value = _timeline_severity_from_score(score_value)
+
+        timeline_rows.append(
+            {
+                "offset": offset,
+                "severity": severity_value,
+                "score": score_value,
+            }
+        )
+
+    if not timeline_rows:
+        return None
+
+    timeline_rows.sort(key=lambda item: item["offset"])
+
+    buckets: list[dict[str, Any]] = []
+    segment_start = float(timeline_rows[0]["offset"])
+    current_severity = str(timeline_rows[0]["severity"])
+    running_score_total = float(timeline_rows[0]["score"]) if timeline_rows[0]["score"] is not None else 0.0
+    running_score_count = 1 if timeline_rows[0]["score"] is not None else 0
+
+    for index in range(1, len(timeline_rows)):
+        row = timeline_rows[index]
+        row_offset = float(row["offset"])
+        row_severity = str(row["severity"])
+
+        if row_severity != current_severity:
+            buckets.append(
+                {
+                    "startOffsetSeconds": segment_start,
+                    "endOffsetSeconds": row_offset,
+                    "severity": current_severity,
+                    "score": (running_score_total / running_score_count) if running_score_count > 0 else None,
+                }
+            )
+            segment_start = row_offset
+            current_severity = row_severity
+            running_score_total = 0.0
+            running_score_count = 0
+
+        if row["score"] is not None:
+            running_score_total += float(row["score"])
+            running_score_count += 1
+
+    final_end = float(timeline_rows[-1]["offset"]) + 1.0
+    buckets.append(
+        {
+            "startOffsetSeconds": segment_start,
+            "endOffsetSeconds": final_end,
+            "severity": current_severity,
+            "score": (running_score_total / running_score_count) if running_score_count > 0 else None,
+        }
+    )
+
+    return {
+        "bucketCount": len(buckets),
+        "sampledSeconds": len(timeline_rows),
+        "buckets": buckets,
+    }
+
+
+def _severity_summary_from_timeline_rows(timeline_rows: list[dict[str, Any]]) -> Optional[dict[str, Any]]:
+    if not timeline_rows:
+        return None
+
+    normalized: list[dict[str, Any]] = []
+    for row in timeline_rows:
+        try:
+            offset = max(0.0, float(row.get("offsetSeconds")))
+        except (TypeError, ValueError):
+            continue
+
+        score_value: Optional[float] = None
+        try:
+            raw_score = row.get("ptsiScore")
+            if raw_score is not None:
+                score_value = float(raw_score)
+        except (TypeError, ValueError):
+            score_value = None
+
+        severity_value = str(row.get("severity") or "").lower()
+        if severity_value not in {"neutral", "light", "moderate", "heavy"}:
+            severity_value = _timeline_severity_from_score(score_value)
+
+        normalized.append({"offset": offset, "score": score_value, "severity": severity_value})
+
+    if not normalized:
+        return None
+
+    normalized.sort(key=lambda item: item["offset"])
+    buckets: list[dict[str, Any]] = []
+    segment_start = float(normalized[0]["offset"])
+    current_severity = str(normalized[0]["severity"])
+    running_score_total = float(normalized[0]["score"]) if normalized[0]["score"] is not None else 0.0
+    running_score_count = 1 if normalized[0]["score"] is not None else 0
+
+    for index in range(1, len(normalized)):
+        row = normalized[index]
+        row_offset = float(row["offset"])
+        row_severity = str(row["severity"])
+
+        if row_severity != current_severity:
+            buckets.append(
+                {
+                    "startOffsetSeconds": segment_start,
+                    "endOffsetSeconds": row_offset,
+                    "severity": current_severity,
+                    "score": (running_score_total / running_score_count) if running_score_count > 0 else None,
+                }
+            )
+            segment_start = row_offset
+            current_severity = row_severity
+            running_score_total = 0.0
+            running_score_count = 0
+
+        if row["score"] is not None:
+            running_score_total += float(row["score"])
+            running_score_count += 1
+
+    buckets.append(
+        {
+            "startOffsetSeconds": segment_start,
+            "endOffsetSeconds": float(normalized[-1]["offset"]) + 1.0,
+            "severity": current_severity,
+            "score": (running_score_total / running_score_count) if running_score_count > 0 else None,
+        }
+    )
+
+    return {"bucketCount": len(buckets), "sampledSeconds": len(normalized), "buckets": buckets}
+
+
+def _severity_summary_has_signal(summary: Optional[dict[str, Any]]) -> bool:
+    buckets = (summary or {}).get("buckets") or []
+    for bucket in buckets:
+        severity = str((bucket or {}).get("severity") or "").lower()
+        if severity and severity != "neutral":
+            return True
+
+        try:
+            score_value = (bucket or {}).get("score")
+            if score_value is not None and float(score_value) > 0.0:
+                return True
+        except (TypeError, ValueError):
+            continue
+
+    return False
+
+
+def _processed_congestion_csv_path(video: dict[str, Any]) -> Optional[Path]:
+    processed_relative = _optional_string(video.get("processedPath"))
+    if not processed_relative:
+        return None
+
+    processed_path = (BACKEND_DIR / processed_relative).resolve(strict=False)
+    congestion_path = Path(f"{processed_path.with_suffix('')}_congestion.csv")
+    if not congestion_path.exists() or not congestion_path.is_file():
+        return None
+    return congestion_path
+
+
+def _parse_congestion_timestamp_offset(value: Any) -> Optional[int]:
+    parsed_time = _parse_clock_time(_optional_string(value))
+    if parsed_time is None:
+        return None
+    return (parsed_time.hour * 3600) + (parsed_time.minute * 60) + parsed_time.second
+
+
+def _score_from_los(los: Optional[str], vc_ratio: Optional[float]) -> float:
+    if los is not None:
+        normalized = str(los).upper()
+        los_scores = {
+            "A": 8.0,
+            "B": 24.0,
+            "C": 42.0,
+            "D": 58.0,
+            "E": 75.0,
+            "F": 92.0,
+        }
+        if normalized in los_scores:
+            return los_scores[normalized]
+
+    if vc_ratio is None:
+        return 0.0
+
+    return float(max(0.0, min(100.0, vc_ratio * 100.0)))
+
+
+def _merge_congestion_timeline_rows(
+    *,
+    video: dict[str, Any],
+    observed_at: Optional[datetime],
+    timeline_rows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    congestion_path = _processed_congestion_csv_path(video)
+    if congestion_path is None:
+        return timeline_rows
+
+    try:
+        with congestion_path.open("r", encoding="utf-8", newline="") as file_handle:
+            reader = csv.DictReader(file_handle)
+            congestion_rows = [dict(row) for row in reader if isinstance(row, dict)]
+    except (OSError, UnicodeDecodeError, csv.Error):
+        return timeline_rows
+
+    if not congestion_rows:
+        return timeline_rows
+
+    by_offset: dict[int, dict[str, Any]] = {}
+    for row in congestion_rows:
+        offset = _parse_congestion_timestamp_offset(row.get("timestamp"))
+        if offset is None:
+            continue
+
+        los_value = _optional_string(row.get("los"))
+        los_upper = los_value.upper() if los_value else None
+        try:
+            vc_ratio = float(row.get("vc_ratio") or "")
+        except (TypeError, ValueError):
+            vc_ratio = None
+        try:
+            volume = int(round(float(row.get("volume") or "0")))
+        except (TypeError, ValueError):
+            volume = 0
+        try:
+            counted_total = int(round(float(row.get("vehicles_counted_total") or "0")))
+        except (TypeError, ValueError):
+            counted_total = 0
+
+        existing = by_offset.get(offset)
+        score = _score_from_los(los_upper, vc_ratio)
+        severity = _timeline_severity_from_score(score)
+        payload = {
+            "offsetSeconds": offset,
+            "visiblePedestrians": max(0, volume),
+            "detectedNow": max(0, volume),
+            "cumulativeUniquePedestrians": max(0, counted_total),
+            "totalPedestriansSoFar": max(0, counted_total),
+            "ptsiScore": score,
+            "los": los_upper,
+            "losDescription": _ptsi_los_description(los_upper),
+            "severity": severity,
+        }
+
+        if existing is None:
+            by_offset[offset] = payload
+            continue
+
+        # Keep highest intensity when congestion CSV has repeated rows in the same second.
+        existing["visiblePedestrians"] = max(int(existing.get("visiblePedestrians") or 0), int(payload["visiblePedestrians"]))
+        existing["detectedNow"] = max(int(existing.get("detectedNow") or 0), int(payload["detectedNow"]))
+        existing["cumulativeUniquePedestrians"] = max(
+            int(existing.get("cumulativeUniquePedestrians") or 0),
+            int(payload["cumulativeUniquePedestrians"]),
+        )
+        existing["totalPedestriansSoFar"] = max(int(existing.get("totalPedestriansSoFar") or 0), int(payload["totalPedestriansSoFar"]))
+        if float(payload["ptsiScore"]) > float(existing.get("ptsiScore") or 0.0):
+            existing["ptsiScore"] = payload["ptsiScore"]
+            existing["los"] = payload["los"]
+            existing["losDescription"] = payload["losDescription"]
+            existing["severity"] = payload["severity"]
+
+    if not by_offset:
+        return timeline_rows
+
+    timeline_by_offset = {int(item.get("offsetSeconds") or 0): item for item in timeline_rows}
+    combined_offsets = sorted(set(timeline_by_offset.keys()) | set(by_offset.keys()))
+    merged_rows: list[dict[str, Any]] = []
+    running_total = 0
+
+    for offset in combined_offsets:
+        base = deepcopy(timeline_by_offset.get(offset) or {
+            "videoId": str(video.get("id") or ""),
+            "offsetSeconds": offset,
+            "videoTime": _format_video_offset_clock(offset),
+            "observedAt": None,
+            "clockTime": None,
+            "visiblePedestrians": 0,
+            "detectedNow": 0,
+            "cumulativeUniquePedestrians": 0,
+            "totalPedestriansSoFar": 0,
+            "lightOcclusionCount": 0,
+            "moderateOcclusionCount": 0,
+            "heavyOcclusionCount": 0,
+            "occlusionValue": 0.0,
+            "ptsiScore": 0.0,
+            "los": None,
+            "losDescription": None,
+            "severity": "neutral",
+            "mode": None,
+            "walkableAreaM2": None,
+            "roiAreaRatio": None,
+            "capacityProxy": None,
+            "congestionScore": 0.0,
+            "spacePerPedestrianM2": None,
+        })
+
+        overlay = by_offset.get(offset)
+        if overlay is not None:
+            for key, value in overlay.items():
+                base[key] = value
+
+        if observed_at is not None:
+            sample_timestamp = (observed_at + timedelta(seconds=offset)).replace(microsecond=0)
+            base["observedAt"] = sample_timestamp.isoformat()
+            base["clockTime"] = sample_timestamp.strftime("%H:%M:%S")
+
+        running_total = max(running_total, int(base.get("totalPedestriansSoFar") or base.get("cumulativeUniquePedestrians") or 0))
+        base["cumulativeUniquePedestrians"] = running_total
+        base["totalPedestriansSoFar"] = running_total
+        merged_rows.append(base)
+
+    return merged_rows
+
+
+def _event_offset_seconds(event: dict[str, Any]) -> Optional[float]:
+    try:
+        raw_offset = event.get("offsetSeconds")
+        if raw_offset is not None:
+            return max(0.0, float(raw_offset))
+    except (TypeError, ValueError):
+        pass
+
+    parsed_clock = _parse_clock_time(_optional_string(event.get("timestamp")))
+    if parsed_clock is None:
+        return None
+
+    return float((parsed_clock.hour * 3600) + (parsed_clock.minute * 60) + parsed_clock.second)
+
+
+def _video_detail_tracks_from_events(state: dict[str, Any], video_id: str) -> list[dict[str, Any]]:
+    windows_by_pedestrian: dict[int, dict[str, float]] = {}
+
+    for event in state.get("events", []):
+        if event.get("videoId") != video_id:
+            continue
+        if str(event.get("type") or "").lower() != "detection":
+            continue
+
+        try:
+            pedestrian_id = int(event.get("pedestrianId"))
+        except (TypeError, ValueError):
+            continue
+
+        offset = _event_offset_seconds(event)
+        if offset is None:
+            continue
+
+        current_window = windows_by_pedestrian.get(pedestrian_id)
+        if current_window is None:
+            windows_by_pedestrian[pedestrian_id] = {"start": offset, "end": offset}
+            continue
+
+        current_window["start"] = min(current_window["start"], offset)
+        current_window["end"] = max(current_window["end"], offset)
+
+    compact_tracks: list[dict[str, Any]] = []
+    for index, (pedestrian_id, window) in enumerate(sorted(windows_by_pedestrian.items(), key=lambda item: item[0])):
+        compact_tracks.append(
+            {
+                "id": f"{video_id}-event-track-{index}",
+                "pedestrianId": pedestrian_id,
+                "firstOffsetSeconds": window["start"],
+                "lastOffsetSeconds": max(window["end"], window["start"] + 0.5),
+            }
+        )
+
+    return compact_tracks
+
+
 def _read_portable_manifest() -> dict[str, Any]:
     ensure_storage_layout()
     if not PORTABLE_MANIFEST_FILE.exists():
@@ -820,6 +1256,17 @@ def _write_portable_video_artifacts(state: dict[str, Any], video: dict[str, Any]
                 "spacePerPedestrianM2": ptsi_breakdown["spacePerPedestrian"],
             }
         )
+
+    timeline_rows = _merge_congestion_timeline_rows(
+        video=video,
+        observed_at=observed_at,
+        timeline_rows=timeline_rows,
+    )
+
+    if not _severity_summary_has_signal(severity_summary):
+        inferred_summary = _severity_summary_from_timeline_rows(timeline_rows)
+        if inferred_summary is not None:
+            severity_summary = inferred_summary
 
     whole_footage_rows = _whole_footage_log_rows(video_id, timeline_rows, second_metrics, track_identity_by_key)
 
@@ -1307,7 +1754,19 @@ def get_video_detail(video_id: str) -> Optional[dict[str, Any]]:
 
     detail = deepcopy(video)
     detail["severitySummary"] = _video_severity_summary(state, detail)
+    if not _severity_summary_has_signal(detail.get("severitySummary")):
+        portable_summary = _portable_video_severity_summary(video_id)
+        if portable_summary is not None:
+            detail["severitySummary"] = portable_summary
+
     detail["pedestrianTracks"] = _video_detail_pedestrian_tracks(state, video_id)
+    if len(detail["pedestrianTracks"]) == 0:
+        portable_tracks = _portable_video_tracks(video_id)
+        if portable_tracks:
+            detail["pedestrianTracks"] = portable_tracks
+    if len(detail["pedestrianTracks"]) == 0:
+        detail["pedestrianTracks"] = _video_detail_tracks_from_events(state, video_id)
+
     return detail
 
 
@@ -1376,8 +1835,19 @@ def remove_video(video_id: str) -> bool:
 def list_events(video_id: Optional[str] = None) -> list[dict[str, Any]]:
     events = load_state()["events"]
     if video_id:
-        return [event for event in events if event.get("videoId") == video_id]
-    return events
+        filtered_events = [event for event in events if event.get("videoId") == video_id]
+    else:
+        filtered_events = events
+
+    normalized_events: list[dict[str, Any]] = []
+    for event in filtered_events:
+        event_copy = deepcopy(event)
+        inferred_offset = _event_offset_seconds(event_copy)
+        if inferred_offset is not None:
+            event_copy["offsetSeconds"] = inferred_offset
+        normalized_events.append(event_copy)
+
+    return normalized_events
 
 
 def get_model_info() -> dict[str, Any]:

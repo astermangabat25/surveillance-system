@@ -374,7 +374,12 @@ export function getMediaUrl(path?: string | null) {
   if (!path) return null
   if (/^https?:\/\//i.test(path)) return path
 
-  const normalizedPath = path.startsWith("/") ? path : `/${path}`
+  const normalizedInput = path.replace(/^\/+/, "")
+  const remappedPath = normalizedInput.startsWith("backend/storage/")
+    ? `storage/${normalizedInput.slice("backend/storage/".length)}`
+    : normalizedInput
+
+  const normalizedPath = remappedPath.startsWith("/") ? remappedPath : `/${remappedPath}`
   return `${API_BASE_URL}${normalizedPath}`
 }
 

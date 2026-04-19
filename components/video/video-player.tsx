@@ -8,7 +8,7 @@ interface VideoPlayerProps {
   videoId: string
   location: string
   src?: string | null
-  pedestrianCount: number
+  vehicleCount: number
   timestamp: string
   date: string
   isProcessed: boolean
@@ -30,7 +30,7 @@ export function VideoPlayer({
   videoId,
   location,
   src,
-  pedestrianCount,
+  vehicleCount,
   timestamp,
   date,
   isProcessed,
@@ -189,7 +189,7 @@ export function VideoPlayer({
         </span>
         <span className="inline-flex items-center gap-1.5 rounded-full bg-secondary px-2.5 py-1">
           <Users className="h-3.5 w-3.5" />
-          {pedestrianCount} pedestrians
+          {vehicleCount} vehicles
         </span>
       </div>
     </div>

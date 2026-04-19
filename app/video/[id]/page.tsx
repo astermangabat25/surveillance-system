@@ -10,8 +10,96 @@ import { EventFeed } from "@/components/surveillance/event-feed"
 import { AISearchBar } from "@/components/surveillance/ai-search-bar"
 import { Button } from "@/components/ui/button"
 import { Switch } from "@/components/ui/switch"
-import { Activity, AlertCircle, ArrowLeft, Clock3, Download, Footprints, Loader2, Share2, Trash2, Users } from "lucide-react"
-import { deleteVideo, getEvents, getLocations, getMediaUrl, getVideo, getVideoPlaybackPath, type EventRecord, type LocationRecord, type VideoDetailRecord, type VideoPedestrianTrackRecord } from "@/lib/api"
+import { Activity, AlertCircle, ArrowLeft, Car, Clock3, Download, Loader2, Share2, Trash2 } from "lucide-react"
+import { deleteVideo, getEvents, getLocations, getMediaUrl, getVideo, getVideoPlaybackPath, type EventRecord, type LocationRecord, type VideoDetailRecord, type VideoPedestrianTrackRecord, type VideoSeverityBucket } from "@/lib/api"
+
+type LOSLevel = "A" | "B" | "C" | "D" | "E" | "F"
+
+function losFromScore(score?: number | null): LOSLevel | null {
+  if (typeof score !== "number" || !Number.isFinite(score)) return null
+  if (score < 15) return "A"
+  if (score < 33) return "B"
+  if (score < 50) return "C"
+  if (score < 66) return "D"
+  if (score < 85) return "E"
+  return "F"
+}
+
+function losScore(level: LOSLevel | null): number {
+  if (level === "A") return 0
+  if (level === "B") return 1
+  if (level === "C") return 2
+  if (level === "D") return 3
+  if (level === "E") return 4
+  if (level === "F") return 5
+  return -1
+}
+
+function formatLos(level: LOSLevel | null): string {
+  return level ? `LOS ${level}` : "LOS --"
+}
+
+function losFromRollingDetections(countInLastMinute: number): LOSLevel {
+  if (countInLastMinute <= 0) return "A"
+  if (countInLastMinute <= 2) return "B"
+  if (countInLastMinute <= 4) return "C"
+  if (countInLastMinute <= 7) return "D"
+  if (countInLastMinute <= 10) return "E"
+  return "F"
+}
+
+interface PortableTimelineRow {
+  offsetSeconds: number
+  severity?: "neutral" | "light" | "moderate" | "heavy" | null
+  ptsiScore?: number | null
+  los?: LOSLevel | null
+  detectedNow?: number | null
+  visiblePedestrians?: number | null
+  totalPedestriansSoFar?: number | null
+  cumulativeUniquePedestrians?: number | null
+}
+
+function parseClockToSeconds(value: string): number | null {
+  const parts = value.trim().split(":").map((part) => Number(part))
+  if (parts.length < 2 || parts.some((part) => !Number.isFinite(part))) {
+    return null
+  }
+
+  if (parts.length === 3) {
+    return (parts[0] * 3600) + (parts[1] * 60) + parts[2]
+  }
+
+  return (parts[0] * 60) + parts[1]
+}
+
+function inferOffsetFromTimestamp(timestamp?: string | null): number | null {
+  if (!timestamp) return null
+  const seconds = parseClockToSeconds(timestamp)
+  if (seconds === null) return null
+  return Math.max(0, seconds)
+}
+
+function normalizeLos(level: unknown): LOSLevel | null {
+  if (level === "A" || level === "B" || level === "C" || level === "D" || level === "E" || level === "F") {
+    return level
+  }
+  return null
+}
+
+function timelineSeverityFromScore(score?: number | null): "neutral" | "light" | "moderate" | "heavy" {
+  if (typeof score !== "number" || !Number.isFinite(score)) return "neutral"
+  if (score < 33) return "light"
+  if (score < 66) return "moderate"
+  return "heavy"
+}
+
+function durationFromClockRange(startTime: string, endTime: string): number {
+  const startSeconds = parseClockToSeconds(startTime)
+  const endSeconds = parseClockToSeconds(endTime)
+  if (startSeconds === null || endSeconds === null) return 0
+  const normalizedEnd = endSeconds >= startSeconds ? endSeconds : endSeconds + (24 * 3600)
+  return Math.max(0, normalizedEnd - startSeconds)
+}
 
 function getDetectionStatus(event: EventRecord) {
   if (event.type === "alert") return "Requires Review"
@@ -52,6 +140,7 @@ function VideoDetailContent({ params }: { params: Promise<{ id: string }> }) {
   const [requestedSeek, setRequestedSeek] = useState<{ seconds: number; token: number } | null>(null)
   const [currentTimeSeconds, setCurrentTimeSeconds] = useState(0)
   const [durationSeconds, setDurationSeconds] = useState(0)
+  const [portableTimelineRows, setPortableTimelineRows] = useState<PortableTimelineRow[]>([])
   const [showAllDetections, setShowAllDetections] = useState(false)
   const [showROI, setShowROI] = useState(false)
   const [deleting, setDeleting] = useState(false)
@@ -101,6 +190,73 @@ function VideoDetailContent({ params }: { params: Promise<{ id: string }> }) {
     setShowROI(false)
     setCurrentTimeSeconds(0)
     setDurationSeconds(0)
+    setPortableTimelineRows([])
+  }, [id])
+
+  useEffect(() => {
+    let cancelled = false
+
+    const loadPortableTimeline = async () => {
+      try {
+        const timelineUrl = getMediaUrl(`storage/portable/videos/${id}/timeline.json`)
+        if (!timelineUrl) {
+          if (!cancelled) setPortableTimelineRows([])
+          return
+        }
+
+        const response = await fetch(timelineUrl, { cache: "no-store" })
+        if (!response.ok) {
+          if (!cancelled) setPortableTimelineRows([])
+          return
+        }
+
+        const payload = await response.json()
+        if (!Array.isArray(payload)) {
+          if (!cancelled) setPortableTimelineRows([])
+          return
+        }
+
+        const rows = payload
+          .map((row): PortableTimelineRow | null => {
+            const offsetRaw = Number((row as Record<string, unknown>).offsetSeconds)
+            if (!Number.isFinite(offsetRaw)) return null
+
+            const scoreValue = Number((row as Record<string, unknown>).ptsiScore)
+            const detectedNowValue = Number((row as Record<string, unknown>).detectedNow)
+            const visibleNowValue = Number((row as Record<string, unknown>).visiblePedestrians)
+            const totalSoFarValue = Number((row as Record<string, unknown>).totalPedestriansSoFar)
+            const cumulativeValue = Number((row as Record<string, unknown>).cumulativeUniquePedestrians)
+            const score = Number.isFinite(scoreValue) ? scoreValue : null
+
+            return {
+              offsetSeconds: Math.max(0, offsetRaw),
+              severity: ((row as Record<string, unknown>).severity as PortableTimelineRow["severity"]) ?? null,
+              ptsiScore: score,
+              los: normalizeLos((row as Record<string, unknown>).los),
+              detectedNow: Number.isFinite(detectedNowValue) ? detectedNowValue : null,
+              visiblePedestrians: Number.isFinite(visibleNowValue) ? visibleNowValue : null,
+              totalPedestriansSoFar: Number.isFinite(totalSoFarValue) ? totalSoFarValue : null,
+              cumulativeUniquePedestrians: Number.isFinite(cumulativeValue) ? cumulativeValue : null,
+            }
+          })
+          .filter((row): row is PortableTimelineRow => row !== null)
+          .sort((left, right) => left.offsetSeconds - right.offsetSeconds)
+
+        if (!cancelled) {
+          setPortableTimelineRows(rows)
+        }
+      } catch {
+        if (!cancelled) {
+          setPortableTimelineRows([])
+        }
+      }
+    }
+
+    void loadPortableTimeline()
+
+    return () => {
+      cancelled = true
+    }
   }, [id])
 
   useEffect(() => {
@@ -124,14 +280,27 @@ function VideoDetailContent({ params }: { params: Promise<{ id: string }> }) {
     setRequestedSeek({ seconds, token: seekTokenRef.current })
   }, [id, searchParams])
 
+  const normalizedEvents = useMemo(
+    () =>
+      events.map((event) => {
+        if (typeof event.offsetSeconds === "number" && Number.isFinite(event.offsetSeconds)) {
+          return event
+        }
+
+        const inferredOffset = inferOffsetFromTimestamp(event.timestamp)
+        return inferredOffset === null ? event : { ...event, offsetSeconds: inferredOffset }
+      }),
+    [events],
+  )
+
   const orderedEvents = useMemo(
     () =>
-      [...events].sort((left, right) => {
+      [...normalizedEvents].sort((left, right) => {
         const leftOffset = typeof left.offsetSeconds === "number" ? left.offsetSeconds : Number.POSITIVE_INFINITY
         const rightOffset = typeof right.offsetSeconds === "number" ? right.offsetSeconds : Number.POSITIVE_INFINITY
         return leftOffset - rightOffset
       }),
-    [events],
+    [normalizedEvents],
   )
 
   const searchMatchOffsets = useMemo(() => {
@@ -162,7 +331,7 @@ function VideoDetailContent({ params }: { params: Promise<{ id: string }> }) {
       .map((event) => ({ id: event.pedestrianId, status: getDetectionStatus(event) }))
   }, [orderedEvents])
 
-  const pedestrianPlaybackWindows = useMemo(() => {
+  const vehiclePlaybackWindows = useMemo(() => {
     const trackWindows = trackPlaybackWindows(video?.pedestrianTracks ?? [])
     if (trackWindows.length > 0) {
       return trackWindows
@@ -190,18 +359,244 @@ function VideoDetailContent({ params }: { params: Promise<{ id: string }> }) {
     return Array.from(windows.values()).map((window) => createPlaybackWindow(window.start, window.end))
   }, [orderedEvents, video?.pedestrianTracks])
 
-  const trackedPedestriansSoFar = useMemo(() => {
-    return pedestrianPlaybackWindows.reduce((count, window) => (window.start <= currentTimeSeconds ? count + 1 : count), 0)
-  }, [currentTimeSeconds, pedestrianPlaybackWindows])
+  const timelineRowsBySecond = useMemo(() => {
+    const bySecond = new Map<number, PortableTimelineRow>()
+    for (const row of portableTimelineRows) {
+      bySecond.set(Math.floor(Math.max(0, row.offsetSeconds)), row)
+    }
+    return bySecond
+  }, [portableTimelineRows])
 
-  const liveDetectedCount = useMemo(
+  const hasTimelineCountSignal = useMemo(
     () =>
-      pedestrianPlaybackWindows.reduce(
+      portableTimelineRows.some((row) => {
+        const visibleNow = typeof row.visiblePedestrians === "number" ? row.visiblePedestrians : 0
+        const detectedNow = typeof row.detectedNow === "number" ? row.detectedNow : 0
+        const totalSoFar = typeof row.totalPedestriansSoFar === "number" ? row.totalPedestriansSoFar : 0
+        const cumulative = typeof row.cumulativeUniquePedestrians === "number" ? row.cumulativeUniquePedestrians : 0
+        return visibleNow > 0 || detectedNow > 0 || totalSoFar > 0 || cumulative > 0
+      }),
+    [portableTimelineRows],
+  )
+
+  const hasTimelineLosSignal = useMemo(
+    () =>
+      portableTimelineRows.some(
+        (row) => row.los !== null || (typeof row.ptsiScore === "number" && Number.isFinite(row.ptsiScore) && row.ptsiScore > 0),
+      ),
+    [portableTimelineRows],
+  )
+
+  const hasBackendLosSignal = useMemo(() => {
+    const buckets = video?.severitySummary?.buckets ?? []
+    return buckets.some(
+      (bucket) => bucket.severity !== "neutral" || (typeof bucket.score === "number" && Number.isFinite(bucket.score) && bucket.score > 0),
+    )
+  }, [video?.severitySummary?.buckets])
+
+  const proxyLosSummary = useMemo(() => {
+    const starts = vehiclePlaybackWindows
+      .map((window) => window.start)
+      .filter((value) => Number.isFinite(value) && value >= 0)
+      .sort((left, right) => left - right)
+
+    if (starts.length === 0) {
+      return { current: null as LOSLevel | null, worst: null as LOSLevel | null, average: null as LOSLevel | null }
+    }
+
+    const windowSeconds = 60
+    const countRecent = (time: number) => {
+      const lowerBound = time - windowSeconds
+      let count = 0
+      for (const start of starts) {
+        if (start > time) break
+        if (start >= lowerBound) count += 1
+      }
+      return count
+    }
+
+    const current = losFromRollingDetections(countRecent(Math.max(0, currentTimeSeconds)))
+
+    const sampleUpperBound = Math.max(
+      Math.ceil(durationSeconds > 0 ? durationSeconds : starts[starts.length - 1] + 1),
+      Math.ceil(starts[starts.length - 1] + 1),
+    )
+
+    const sampledLos: LOSLevel[] = []
+    for (let second = 0; second <= sampleUpperBound; second += 1) {
+      sampledLos.push(losFromRollingDetections(countRecent(second)))
+    }
+
+    const worst = sampledLos.reduce<LOSLevel | null>((acc, level) => (losScore(level) > losScore(acc) ? level : acc), null)
+    const averageRank = sampledLos.reduce((sum, level) => sum + losScore(level), 0) / sampledLos.length
+    const average = averageRank < 0.5
+      ? "A"
+      : averageRank < 1.5
+        ? "B"
+        : averageRank < 2.5
+          ? "C"
+          : averageRank < 3.5
+            ? "D"
+            : averageRank < 4.5
+              ? "E"
+              : "F"
+
+    return { current, worst, average }
+  }, [currentTimeSeconds, durationSeconds, vehiclePlaybackWindows])
+
+  const activeTimelineRow = useMemo(
+    () => timelineRowsBySecond.get(Math.floor(Math.max(0, currentTimeSeconds))) ?? null,
+    [currentTimeSeconds, timelineRowsBySecond],
+  )
+
+  const trackedVehiclesSoFar = useMemo(() => {
+    const timelineValue = hasTimelineCountSignal
+      ? activeTimelineRow?.totalPedestriansSoFar ?? activeTimelineRow?.cumulativeUniquePedestrians
+      : null
+    if (typeof timelineValue === "number" && Number.isFinite(timelineValue) && timelineValue >= 0) {
+      return Math.max(0, Math.round(timelineValue))
+    }
+
+    return vehiclePlaybackWindows.reduce((count, window) => (window.start <= currentTimeSeconds ? count + 1 : count), 0)
+  }, [activeTimelineRow, currentTimeSeconds, hasTimelineCountSignal, vehiclePlaybackWindows])
+
+  const liveDetectedVehicles = useMemo(
+    () => {
+      const timelineValue = hasTimelineCountSignal
+        ? activeTimelineRow?.detectedNow ?? activeTimelineRow?.visiblePedestrians
+        : null
+      if (typeof timelineValue === "number" && Number.isFinite(timelineValue) && timelineValue >= 0) {
+        return Math.max(0, Math.round(timelineValue))
+      }
+
+      return vehiclePlaybackWindows.reduce(
         (count, window) => (currentTimeSeconds >= window.start && currentTimeSeconds <= window.end ? count + 1 : count),
         0,
-      ),
-    [currentTimeSeconds, pedestrianPlaybackWindows],
+      )
+    },
+    [activeTimelineRow, currentTimeSeconds, hasTimelineCountSignal, vehiclePlaybackWindows],
   )
+
+  const losSummary = useMemo(() => {
+    if (portableTimelineRows.length > 0 && hasTimelineLosSignal) {
+      const current = activeTimelineRow?.los ?? losFromScore(activeTimelineRow?.ptsiScore)
+      const scoredLevels = portableTimelineRows
+        .map((row) => row.los ?? losFromScore(row.ptsiScore))
+        .filter((level): level is LOSLevel => level !== null)
+
+      const worst = scoredLevels.reduce<LOSLevel | null>((acc, level) => (losScore(level) > losScore(acc) ? level : acc), null)
+
+      const scoredValues = portableTimelineRows
+        .map((row) => (typeof row.ptsiScore === "number" ? row.ptsiScore : null))
+        .filter((score): score is number => score !== null)
+
+      const average = scoredValues.length > 0
+        ? losFromScore(scoredValues.reduce((sum, value) => sum + value, 0) / scoredValues.length)
+        : null
+
+      return { current, worst, average }
+    }
+
+    if (!hasBackendLosSignal) {
+      return proxyLosSummary
+    }
+
+    const buckets = video?.severitySummary?.buckets ?? []
+    if (buckets.length === 0) {
+      return { current: null as LOSLevel | null, worst: null as LOSLevel | null, average: null as LOSLevel | null }
+    }
+
+    const bucketAtCurrent = buckets.find(
+      (bucket) => currentTimeSeconds >= bucket.startOffsetSeconds && currentTimeSeconds <= bucket.endOffsetSeconds,
+    )
+    const current = losFromScore(bucketAtCurrent?.score)
+
+    const scoredLevels = buckets
+      .map((bucket) => losFromScore(bucket.score))
+      .filter((level): level is LOSLevel => level !== null)
+
+    const worst = scoredLevels.reduce<LOSLevel | null>((acc, level) => (losScore(level) > losScore(acc) ? level : acc), null)
+
+    const scoredValues = buckets
+      .map((bucket) => (typeof bucket.score === "number" ? bucket.score : null))
+      .filter((score): score is number => score !== null)
+
+    const average = scoredValues.length > 0
+      ? losFromScore(scoredValues.reduce((sum, value) => sum + value, 0) / scoredValues.length)
+      : null
+
+    return { current, worst, average }
+  }, [
+    activeTimelineRow,
+    currentTimeSeconds,
+    hasBackendLosSignal,
+    hasTimelineLosSignal,
+    portableTimelineRows,
+    proxyLosSummary,
+    video?.severitySummary?.buckets,
+  ])
+
+  const playbackSeverityBuckets = useMemo<VideoSeverityBucket[]>(() => {
+    const backendBuckets = video?.severitySummary?.buckets ?? []
+    if (backendBuckets.length > 0) {
+      return backendBuckets
+    }
+
+    if (portableTimelineRows.length < 2) {
+      return []
+    }
+
+    const buckets: VideoSeverityBucket[] = []
+    let segmentStart = portableTimelineRows[0].offsetSeconds
+    let currentSeverity = portableTimelineRows[0].severity ?? timelineSeverityFromScore(portableTimelineRows[0].ptsiScore)
+    let runningScoreTotal = typeof portableTimelineRows[0].ptsiScore === "number" ? portableTimelineRows[0].ptsiScore : 0
+    let runningScoreCount = typeof portableTimelineRows[0].ptsiScore === "number" ? 1 : 0
+
+    for (let index = 1; index < portableTimelineRows.length; index += 1) {
+      const row = portableTimelineRows[index]
+      const rowSeverity = row.severity ?? timelineSeverityFromScore(row.ptsiScore)
+      const changedSeverity = rowSeverity !== currentSeverity
+
+      if (changedSeverity) {
+        buckets.push({
+          startOffsetSeconds: segmentStart,
+          endOffsetSeconds: row.offsetSeconds,
+          severity: currentSeverity,
+          score: runningScoreCount > 0 ? runningScoreTotal / runningScoreCount : null,
+        })
+
+        segmentStart = row.offsetSeconds
+        currentSeverity = rowSeverity
+        runningScoreTotal = 0
+        runningScoreCount = 0
+      }
+
+      if (typeof row.ptsiScore === "number") {
+        runningScoreTotal += row.ptsiScore
+        runningScoreCount += 1
+      }
+    }
+
+    const finalOffset = portableTimelineRows[portableTimelineRows.length - 1].offsetSeconds + 1
+    buckets.push({
+      startOffsetSeconds: segmentStart,
+      endOffsetSeconds: finalOffset,
+      severity: currentSeverity,
+      score: runningScoreCount > 0 ? runningScoreTotal / runningScoreCount : null,
+    })
+
+    return buckets
+  }, [portableTimelineRows, video?.severitySummary?.buckets])
+
+  const fallbackDurationSeconds = useMemo(() => {
+    const timelineMaxOffset = portableTimelineRows.length > 0
+      ? portableTimelineRows[portableTimelineRows.length - 1].offsetSeconds + 1
+      : 0
+    const clockRangeDuration = video ? durationFromClockRange(video.startTime, video.endTime) : 0
+    return Math.max(timelineMaxOffset, clockRangeDuration)
+  }, [portableTimelineRows, video])
+
+  const effectiveDurationSeconds = durationSeconds > 0 ? durationSeconds : fallbackDurationSeconds
 
   const visibleDetectionDetails = showAllDetections ? detectionDetails : detectionDetails.slice(0, 15)
   const hasCollapsedDetections = detectionDetails.length > 15
@@ -210,33 +605,25 @@ function VideoDetailContent({ params }: { params: Promise<{ id: string }> }) {
   const mediaUrl = video ? getMediaUrl(getVideoPlaybackPath(video)) : null
   const metricTiles = [
     {
-      icon: Users,
-      value: String(trackedPedestriansSoFar),
+      icon: Car,
+      value: String(trackedVehiclesSoFar),
       caption: "Total so far",
       iconClassName: "bg-emerald-500 text-white ring-emerald-500/20",
       valueClassName: "text-emerald-100 sm:text-foreground",
       cardClassName: "border-emerald-400/30 bg-gradient-to-br from-emerald-500/18 via-green-500/10 to-transparent",
     },
     {
-      icon: Footprints,
-      value: String(liveDetectedCount),
-      caption: "Detected now",
-      iconClassName: "bg-cyan-500 text-white ring-cyan-500/20",
-      valueClassName: "text-cyan-100 sm:text-foreground",
-      cardClassName: "border-cyan-400/30 bg-gradient-to-br from-cyan-500/20 via-sky-500/10 to-transparent",
-    },
-    {
       icon: Activity,
-      value: "--",
-      caption: "Metric 3",
+      value: formatLos(losSummary.current),
+      caption: "Current LOS",
       iconClassName: "bg-violet-500/90 text-white ring-violet-500/20",
       valueClassName: "text-foreground",
       cardClassName: "border-violet-400/25 bg-gradient-to-br from-violet-500/12 via-fuchsia-500/8 to-transparent",
     },
     {
       icon: Clock3,
-      value: "--",
-      caption: "Metric 4",
+      value: formatLos(losSummary.worst),
+      caption: "Worst LOS",
       iconClassName: "bg-amber-500/90 text-white ring-amber-500/20",
       valueClassName: "text-foreground",
       cardClassName: "border-amber-400/25 bg-gradient-to-br from-amber-500/12 via-orange-500/8 to-transparent",
@@ -388,7 +775,7 @@ function VideoDetailContent({ params }: { params: Promise<{ id: string }> }) {
               <div className="flex items-center justify-between gap-4 rounded-2xl border border-border/70 bg-card/70 px-4 py-3 shadow-elevated-sm">
                 <div>
                   <p className="text-sm font-medium text-foreground">Show ROI Outline</p>
-                  <p className="text-xs text-muted-foreground">Display the stored walkable ROI polygons over the video for alignment debugging.</p>
+                  <p className="text-xs text-muted-foreground">Display the stored monitored ROI polygons over the video for alignment debugging.</p>
                 </div>
                 <div className="flex items-center gap-3">
                   <span className="text-xs font-medium text-muted-foreground">{showROI ? "ON" : "OFF"}</span>
@@ -402,7 +789,7 @@ function VideoDetailContent({ params }: { params: Promise<{ id: string }> }) {
               videoId={video.id}
               location={video.location}
               src={mediaUrl}
-              pedestrianCount={video.pedestrianCount}
+              vehicleCount={video.pedestrianCount}
               timestamp={video.timestamp}
               date={video.date}
               isProcessed={Boolean(video.processedPath)}
@@ -414,7 +801,7 @@ function VideoDetailContent({ params }: { params: Promise<{ id: string }> }) {
               onDurationChange={setDurationSeconds}
             />
 
-            <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
               {metricTiles.map((tile) => {
                 const Icon = tile.icon
                 return (
@@ -438,10 +825,10 @@ function VideoDetailContent({ params }: { params: Promise<{ id: string }> }) {
             <PlaybackTimeline
               startTime={video.startTime}
               endTime={video.endTime}
-              durationSeconds={durationSeconds}
+              durationSeconds={effectiveDurationSeconds}
               currentTimeSeconds={currentTimeSeconds}
               events={orderedEvents}
-              severityBuckets={video.severitySummary?.buckets ?? []}
+              severityBuckets={playbackSeverityBuckets}
               searchMatchOffsets={searchMatchOffsets}
               onSeek={requestSeek}
             />
@@ -453,8 +840,11 @@ function VideoDetailContent({ params }: { params: Promise<{ id: string }> }) {
               endTime={video.endTime}
               gpsLat={video.gpsLat}
               gpsLng={video.gpsLng}
-              trackedPedestriansSoFar={trackedPedestriansSoFar}
-              pedestrianCount={video.pedestrianCount}
+              trackedVehiclesSoFar={trackedVehiclesSoFar}
+              vehicleCount={video.pedestrianCount}
+              currentLOS={losSummary.current}
+              worstLOS={losSummary.worst}
+              averageLOS={losSummary.average}
             />
           </div>
         </div>
@@ -473,7 +863,7 @@ function VideoDetailContent({ params }: { params: Promise<{ id: string }> }) {
         
         {/* Detection Details */}
         <div className="border-t border-border p-4">
-          <h4 className="text-sm font-medium text-foreground mb-3">Detection Details</h4>
+            <h4 className="text-sm font-medium text-foreground mb-3">Vehicle Detection Details</h4>
           {detectionDetails.length > 0 ? (
             <div className="space-y-2">
               {visibleDetectionDetails.map((detail) => (
@@ -490,7 +880,7 @@ function VideoDetailContent({ params }: { params: Promise<{ id: string }> }) {
               )}
             </div>
           ) : (
-            <p className="text-sm text-muted-foreground">No tracked pedestrian IDs are available for this video yet.</p>
+            <p className="text-sm text-muted-foreground">No tracked vehicle IDs are available for this video yet.</p>
           )}
         </div>
       </aside>
@@ -516,7 +906,7 @@ function DetectionDetail({ id, status }: { id: number; status: string }) {
   
   return (
     <div className="flex items-center justify-between p-2 rounded-lg bg-secondary/50 border border-border">
-      <span className="text-sm text-foreground">Pedestrian ID #{id}</span>
+      <span className="text-sm text-foreground">Vehicle ID #{id}</span>
       <span className={`text-xs ${statusColor}`}>{status}</span>
     </div>
   )

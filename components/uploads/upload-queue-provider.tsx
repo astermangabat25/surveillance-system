@@ -7,6 +7,7 @@ import { WalkingLoader } from "@/components/ui/walking-loader"
 const MAX_CONCURRENT_UPLOADS = 2
 const UPLOAD_QUEUE_STORAGE_KEY = "alive-upload-queue"
 const REHYDRATION_POLL_INTERVAL_MS = 1_000
+const HISTORY_REFRESH_INTERVAL_MS = 5_000
 
 type UploadState = VideoUploadStatus["state"]
 type UploadPhase = VideoUploadStatus["phase"]
@@ -524,6 +525,37 @@ export function UploadQueueProvider({ children }: { children: ReactNode }) {
       window.clearInterval(intervalId)
     }
   }, [updateUpload, uploads])
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return
+    }
+
+    let isCancelled = false
+
+    const refreshHistory = async () => {
+      try {
+        const history = await getVideoUploadHistory()
+        if (isCancelled || history.length === 0) {
+          return
+        }
+
+        setUploads((currentUploads) => mergeUploadsWithHistory(currentUploads, history))
+      } catch {
+        // Keep current UI state if history endpoint is temporarily unavailable.
+      }
+    }
+
+    void refreshHistory()
+    const intervalId = window.setInterval(() => {
+      void refreshHistory()
+    }, HISTORY_REFRESH_INTERVAL_MS)
+
+    return () => {
+      isCancelled = true
+      window.clearInterval(intervalId)
+    }
+  }, [])
 
   const runUpload = useCallback(
     async (queueItemId: string) => {

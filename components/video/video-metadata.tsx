@@ -8,8 +8,11 @@ interface VideoMetadataProps {
   endTime: string
   gpsLat: number
   gpsLng: number
-  trackedPedestriansSoFar: number
-  pedestrianCount: number
+  trackedVehiclesSoFar: number
+  vehicleCount: number
+  currentLOS?: string | null
+  worstLOS?: string | null
+  averageLOS?: string | null
 }
 
 export function VideoMetadata({ 
@@ -18,11 +21,14 @@ export function VideoMetadata({
   endTime, 
   gpsLat, 
   gpsLng,
-  trackedPedestriansSoFar,
-  pedestrianCount 
+  trackedVehiclesSoFar,
+  vehicleCount,
+  currentLOS,
+  worstLOS,
+  averageLOS,
 }: VideoMetadataProps) {
   return (
-    <div className="grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-5">
+    <div className="grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-6">
       <MetadataCard
         icon={Calendar}
         label="Date"
@@ -40,14 +46,26 @@ export function VideoMetadata({
       />
       <MetadataCard
         icon={Users}
-        label="Tracked So Far"
-        value={trackedPedestriansSoFar.toString()}
+        label="Tracked Vehicles"
+        value={trackedVehiclesSoFar.toString()}
         highlight
       />
       <MetadataCard
         icon={Users}
-        label="Total Pedestrians"
-        value={pedestrianCount.toString()}
+        label="Total Vehicles"
+        value={vehicleCount.toString()}
+        highlight
+      />
+      <MetadataCard
+        icon={Users}
+        label="LOS (Current/Worst)"
+        value={`${currentLOS ?? "--"} / ${worstLOS ?? "--"}`}
+        highlight
+      />
+      <MetadataCard
+        icon={Users}
+        label="LOS (Average)"
+        value={averageLOS ?? "--"}
         highlight
       />
     </div>

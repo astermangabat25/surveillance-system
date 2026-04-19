@@ -17,10 +17,10 @@ interface PlaybackTimelineProps {
 type SeverityLevel = "neutral" | "light" | "moderate" | "heavy"
 
 const SEVERITY_STYLES: Record<SeverityLevel, { label: string; fill: string }> = {
-  neutral: { label: "Neutral", fill: "rgba(148, 163, 184, 0.12)" },
-  light: { label: "Light", fill: "rgba(250, 204, 21, 0.82)" },
-  moderate: { label: "Moderate", fill: "rgba(249, 115, 22, 0.84)" },
-  heavy: { label: "High", fill: "rgba(239, 68, 68, 0.86)" },
+  neutral: { label: "LOS A-B", fill: "rgba(16, 185, 129, 0.32)" },
+  light: { label: "LOS C", fill: "rgba(132, 204, 22, 0.4)" },
+  moderate: { label: "LOS D", fill: "rgba(245, 158, 11, 0.5)" },
+  heavy: { label: "LOS E-F", fill: "rgba(239, 68, 68, 0.58)" },
 }
 
 function formatDuration(seconds: number) {
@@ -133,7 +133,7 @@ export function PlaybackTimeline({
           left: (startOffset / safeDuration) * 100,
           width: ((endOffset - startOffset) / safeDuration) * 100,
           severity: bucket.severity,
-          title: `${SEVERITY_STYLES[bucket.severity].label} severity${scoreLabel} • ${formatRangeLabel(startOffset, endOffset)}`,
+          title: `${SEVERITY_STYLES[bucket.severity].label}${scoreLabel} • ${formatRangeLabel(startOffset, endOffset)}`,
         }
       })
       .filter((bucket): bucket is { left: number; width: number; severity: SeverityLevel; title: string } => bucket !== null)
@@ -152,7 +152,7 @@ export function PlaybackTimeline({
           left: 0,
           width: 100,
           severity: "neutral" as const,
-          title: `No severity samples • ${formatRangeLabel(0, safeDuration)}`,
+          title: `No LOS samples • ${formatRangeLabel(0, safeDuration)}`,
         },
       ]
     }
@@ -189,7 +189,7 @@ export function PlaybackTimeline({
       left: (segment.startOffset / safeDuration) * 100,
       width: ((segment.endOffset - segment.startOffset) / safeDuration) * 100,
       severity: segment.severity,
-      title: `${SEVERITY_STYLES[segment.severity].label} severity • ${formatRangeLabel(segment.startOffset, segment.endOffset)}`,
+      title: `${SEVERITY_STYLES[segment.severity].label} • ${formatRangeLabel(segment.startOffset, segment.endOffset)}`,
     }))
   }, [safeDuration, timedEvents])
 
@@ -364,12 +364,12 @@ export function PlaybackTimeline({
 
             {clusteredMarkers.map((marker) => {
               const markerStyle = marker.maxSeverity === "heavy"
-                ? "bg-red-500/90"
+                ? "bg-red-500/95"
                 : marker.maxSeverity === "moderate"
-                  ? "bg-orange-400/90"
+                  ? "bg-amber-500/95"
                   : marker.maxSeverity === "light"
-                    ? "bg-yellow-300/95"
-                    : "bg-violet-500/90"
+                    ? "bg-lime-500/95"
+                    : "bg-emerald-500/95"
 
               return (
                 <button
@@ -411,27 +411,21 @@ export function PlaybackTimeline({
           <div className="mt-4 flex flex-wrap items-center justify-between gap-2 border-t border-border pt-3 text-xs text-muted-foreground">
             <div className="flex flex-wrap items-center gap-3">
               <span className="inline-flex items-center gap-2">
-                <span className="h-2.5 w-2.5 rounded-sm bg-yellow-300" />
-                Light
+                <span className="h-2.5 w-2.5 rounded-sm bg-emerald-500" />
+                LOS A-B
               </span>
               <span className="inline-flex items-center gap-2">
-                <span className="h-2.5 w-2.5 rounded-sm bg-orange-400" />
-                Moderate
+                <span className="h-2.5 w-2.5 rounded-sm bg-lime-500" />
+                LOS C
+              </span>
+              <span className="inline-flex items-center gap-2">
+                <span className="h-2.5 w-2.5 rounded-sm bg-amber-500" />
+                LOS D
               </span>
               <span className="inline-flex items-center gap-2">
                 <span className="h-2.5 w-2.5 rounded-sm bg-red-500" />
-                High
+                LOS E-F
               </span>
-              <span className="inline-flex items-center gap-2">
-                <span className="h-3 w-1.5 rounded-[2px] bg-violet-500" />
-                Event markers
-              </span>
-              {hasSearchMatches ? (
-                <span className="inline-flex items-center gap-2">
-                  <span className="h-2 w-4 rounded-full border border-cyan-200/80 bg-cyan-400/65" />
-                  AI search
-                </span>
-              ) : null}
             </div>
             <span>
               {formatDuration(safeCurrentTime)} / {formatDuration(safeDuration)}

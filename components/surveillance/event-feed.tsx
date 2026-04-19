@@ -137,7 +137,7 @@ function EventCard({
             <span className="rounded-full bg-muted px-2 py-0.5 text-muted-foreground">{event.timestamp}</span>
             <span className="rounded-full bg-primary/10 px-2 py-0.5 text-primary">{formatOffset(event)}</span>
             {typeof event.pedestrianId === "number" && (
-              <span className="rounded-full bg-accent/10 px-2 py-0.5 font-medium text-accent">ID #{event.pedestrianId}</span>
+              <span className="rounded-full bg-accent/10 px-2 py-0.5 font-medium text-accent">Vehicle ID #{event.pedestrianId}</span>
             )}
           </div>
         </div>

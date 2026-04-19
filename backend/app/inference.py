@@ -4,6 +4,7 @@ import colorsys
 import csv
 import os
 import re
+import shutil
 import signal
 import subprocess
 import sys
@@ -53,7 +54,16 @@ def _foot_point_norm(bounds: tuple[int, int, int, int], frame_image: Any) -> Opt
 
 
 def _thesis_root_dir() -> Path:
-    return store.BACKEND_DIR.parent.parent
+    # Project root for the surveillance-system workspace.
+    return store.BACKEND_DIR.parent
+
+
+def _is_within_project(path: Path) -> bool:
+    try:
+        path.resolve(strict=False).relative_to(_thesis_root_dir().resolve(strict=False))
+        return True
+    except ValueError:
+        return False
 
 
 def _candidate_occlusion_repo_dirs() -> list[Path]:
@@ -61,14 +71,16 @@ def _candidate_occlusion_repo_dirs() -> list[Path]:
 
     configured_repo_dir = os.getenv("OCCLUSION_RTDETR_DIR", "").strip()
     if configured_repo_dir:
-        candidates.append(Path(configured_repo_dir).expanduser())
+        configured_candidate = Path(configured_repo_dir).expanduser()
+        if not configured_candidate.is_absolute():
+            configured_candidate = (_thesis_root_dir() / configured_candidate).resolve(strict=False)
+        if _is_within_project(configured_candidate):
+            candidates.append(configured_candidate)
 
+    candidates.append(store.BACKEND_DIR / "Occlusion-Robust-RTDETR")
     candidates.append(_thesis_root_dir() / "Occlusion-Robust-RTDETR")
-    candidates.append(store.BACKEND_DIR.parent / "Occlusion-Robust-RTDETR")
-
-    # Also scan ancestor directories to support varied local folder layouts.
-    for ancestor in [store.BACKEND_DIR, *store.BACKEND_DIR.parents]:
-        candidates.append(ancestor / "Occlusion-Robust-RTDETR")
+    candidates.append(store.BACKEND_DIR / "vendor" / "Occlusion-Robust-RTDETR")
+    candidates.append(_thesis_root_dir() / "backend" / "vendor" / "Occlusion-Robust-RTDETR")
 
     deduped: list[Path] = []
     seen: set[str] = set()
@@ -82,7 +94,11 @@ def _candidate_occlusion_repo_dirs() -> list[Path]:
 
 
 def _looks_like_occlusion_repo(candidate: Path) -> bool:
-    return (candidate / "tools" / "infer.py").exists()
+    infer_candidates = [
+        candidate / "src" / "zoo" / "rtdetr" / "infer.py",
+        candidate / "tools" / "infer.py",
+    ]
+    return any(path.exists() for path in infer_candidates)
 
 
 def _occlusion_repo_dir() -> Path:
@@ -117,7 +133,24 @@ def requirements_counting_dir() -> Path:
 
 
 def _infer_script_path() -> Path:
-    return _occlusion_repo_dir() / "tools" / "infer.py"
+    configured_script = str(os.getenv("RTDETR_INFER_SCRIPT") or "").strip()
+    if configured_script:
+        configured_path = Path(configured_script).expanduser()
+        if not configured_path.is_absolute():
+            configured_path = (_occlusion_repo_dir() / configured_path).resolve(strict=False)
+        return configured_path
+
+    repo_dir = _occlusion_repo_dir()
+    preferred_candidates = [
+        repo_dir / "src" / "zoo" / "rtdetr" / "infer.py",
+        repo_dir / "tools" / "infer.py",
+    ]
+
+    for candidate in preferred_candidates:
+        if candidate.exists():
+            return candidate
+
+    return preferred_candidates[0]
 
 
 def _infer_config_path() -> Path:
@@ -172,6 +205,21 @@ def _infer_annotations_path() -> Optional[Path]:
             return candidate
 
     return None
+
+
+def _required_annotations_path() -> Path:
+    configured_path = str(os.getenv("RTDETR_ANNOTATIONS_PATH") or "").strip()
+    if configured_path:
+        configured_candidate = Path(configured_path).expanduser()
+        if not configured_candidate.is_absolute():
+            configured_candidate = (_occlusion_repo_dir() / configured_candidate).resolve(strict=False)
+        return configured_candidate
+
+    inferred_path = _infer_annotations_path()
+    if inferred_path is not None:
+        return inferred_path
+
+    return INFERENCE_ANNOTATIONS_DIR / "instances_train.json"
 
 
 def _normalized_counting_location_suffix(location_name: Optional[str]) -> Optional[str]:
@@ -239,12 +287,16 @@ def _model_search_roots() -> list[Path]:
         store.MODELS_DIR,
         store.STORAGE_DIR,
         _thesis_root_dir(),
-        store.BACKEND_DIR.parent,
+        store.BACKEND_DIR,
     ]
 
     configured_model_dir = os.getenv("MODEL_SEARCH_DIR", "").strip()
     if configured_model_dir:
-        candidates.insert(0, Path(configured_model_dir).expanduser())
+        configured_candidate = Path(configured_model_dir).expanduser()
+        if not configured_candidate.is_absolute():
+            configured_candidate = (_thesis_root_dir() / configured_candidate).resolve(strict=False)
+        if _is_within_project(configured_candidate):
+            candidates.insert(0, configured_candidate)
 
     deduped: list[Path] = []
     seen: set[str] = set()
@@ -312,9 +364,14 @@ def resolve_model_path(model_name: Optional[str]) -> Optional[Path]:
         if explicit_path.is_absolute() and explicit_path.exists() and explicit_path.is_file() and explicit_path.suffix.lower() in allowed_suffixes:
             return explicit_path
 
-        for base_dir in (store.BACKEND_DIR, store.BACKEND_DIR.parent, _thesis_root_dir()):
+        for base_dir in (store.BACKEND_DIR, _thesis_root_dir()):
             candidate = (base_dir / explicit_path).resolve(strict=False)
-            if candidate.exists() and candidate.is_file() and candidate.suffix.lower() in allowed_suffixes:
+            if (
+                candidate.exists()
+                and candidate.is_file()
+                and candidate.suffix.lower() in allowed_suffixes
+                and _is_within_project(candidate)
+            ):
                 return candidate
 
         default_models_dir_candidate = store.MODELS_DIR / Path(model_value).name
@@ -347,10 +404,8 @@ def ultralytics_status() -> dict[str, Any]:
         infer_script,
         _infer_config_path(),
         _infer_counting_config_path(),
+        _required_annotations_path(),
     ]
-    annotations_path = _infer_annotations_path()
-    if annotations_path is not None:
-        fixed_required_paths.append(annotations_path)
     missing_fixed_path = _first_missing_path(fixed_required_paths)
     pipeline_installed = missing_fixed_path is None
     version = None
@@ -448,16 +503,30 @@ def preferred_inference_device() -> str:
     return "cpu"
 
 
+def _inference_python_executable() -> Path:
+    configured_python = str(os.getenv("INFERENCE_PYTHON_BIN") or "").strip()
+    if configured_python:
+        configured_path = Path(configured_python).expanduser()
+        if configured_path.exists() and configured_path.is_file():
+            return configured_path
+
+    backend_venv_python = store.BACKEND_DIR / "venv" / "bin" / "python"
+    if backend_venv_python.exists() and backend_venv_python.is_file():
+        return backend_venv_python
+
+    return Path(sys.executable)
+
+
 def _build_rtdetr_command(
     *,
     model_path: Path,
     video_path: Path,
     output_path: Path,
     counting_config_path: Path,
-    annotations_path: Optional[Path],
+    annotations_path: Path,
 ) -> list[str]:
     command = [
-        str(Path(sys.executable).resolve()),
+        str(_inference_python_executable()),
         str(_infer_script_path().resolve()),
         "--config",
         str(_infer_config_path().resolve()),
@@ -479,10 +548,9 @@ def _build_rtdetr_command(
         preferred_inference_device(),
         "--batch-size",
         "32",
+        "-a",
+        str(annotations_path.resolve()),
     ]
-
-    if annotations_path is not None and annotations_path.exists():
-        command.extend(["-a", str(annotations_path.resolve())])
 
     return command
 
@@ -577,6 +645,53 @@ def _resolve_processed_video_path(*, explicit_output_path: Path, save_dir: Path,
         "RT-DETR inference finished but no processed output video was found. "
         f"Expected output near: {explicit_output_path}"
     )
+
+
+def _ensure_browser_playable_mp4(video_path: Path) -> Path:
+    if video_path.suffix.lower() != ".mp4":
+        return video_path
+
+    ffmpeg_path = shutil.which("ffmpeg")
+    if not ffmpeg_path:
+        return video_path
+
+    transcoded_path = video_path.with_name(f"{video_path.stem}.h264.mp4")
+    command = [
+        ffmpeg_path,
+        "-y",
+        "-i",
+        str(video_path),
+        "-map",
+        "0:v:0",
+        "-map",
+        "0:a?",
+        "-c:v",
+        "libx264",
+        "-preset",
+        "veryfast",
+        "-pix_fmt",
+        "yuv420p",
+        "-movflags",
+        "+faststart",
+        "-c:a",
+        "aac",
+        str(transcoded_path),
+    ]
+
+    try:
+        completed = subprocess.run(command, capture_output=True, text=True, check=False)
+    except Exception:
+        return video_path
+
+    if completed.returncode != 0 or not transcoded_path.exists():
+        return video_path
+
+    try:
+        transcoded_path.replace(video_path)
+    except OSError:
+        return video_path
+
+    return video_path
 
 
 def _parse_clock_time(value: str) -> Optional[datetime]:
@@ -1133,7 +1248,12 @@ def run_video_inference(
     save_dir.mkdir(parents=True, exist_ok=True)
     output_video_path = save_dir / f"{video_path.stem}-processed.mp4"
     counting_config_path = _infer_counting_config_path((video_record or {}).get("location"))
-    annotations_path = _infer_annotations_path()
+    annotations_path = _required_annotations_path()
+    if not annotations_path.exists() or not annotations_path.is_file():
+        raise RuntimeError(
+            "RT-DETR inference requires an annotations JSON file. "
+            f"Missing required path: {_project_relative_path(annotations_path)}"
+        )
     command = _build_rtdetr_command(
         model_path=model_path,
         video_path=video_path,
@@ -1201,7 +1321,12 @@ def run_video_inference(
             f"{resolved_output_video_path}"
         )
 
-    processed_path = _project_relative_path(resolved_output_video_path)
+    resolved_output_video_path = _ensure_browser_playable_mp4(resolved_output_video_path)
+
+    try:
+        processed_path = str(resolved_output_video_path.relative_to(store.BACKEND_DIR))
+    except ValueError:
+        processed_path = _project_relative_path(resolved_output_video_path)
     if not processed_path:
         raise RuntimeError(
             "RT-DETR inference finished but could not resolve processedPath for API response."
