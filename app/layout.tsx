@@ -1,6 +1,7 @@
 import type { Metadata } from 'next'
 import { Inter } from 'next/font/google'
 import { Analytics } from '@vercel/analytics/next'
+import 'leaflet/dist/leaflet.css'
 import './globals.css'
 import { Sidebar } from '@/components/sidebar'
 import { LoadingProvider } from '@/components/ui/walking-loader'

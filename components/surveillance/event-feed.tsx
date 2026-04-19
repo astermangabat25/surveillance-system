@@ -98,6 +98,12 @@ function formatOffset(event: EventRecord) {
   return "Open footage"
 }
 
+function formatEventDescription(description: string) {
+  return description
+    .replace(/Pedestrian ID/gi, "Vehicle ID")
+    .replace(/\bPedestrian\b/gi, "Vehicle")
+}
+
 function EventCard({
   event,
   active,
@@ -132,7 +138,7 @@ function EventCard({
             <p className="text-sm font-medium text-foreground truncate">{event.location}</p>
             {interactive && <ArrowRight className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground" />}
           </div>
-          <p className="mt-0.5 text-xs text-muted-foreground">{event.description}</p>
+          <p className="mt-0.5 text-xs text-muted-foreground">{formatEventDescription(event.description)}</p>
           <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[10px]">
             <span className="rounded-full bg-muted px-2 py-0.5 text-muted-foreground">{event.timestamp}</span>
             <span className="rounded-full bg-primary/10 px-2 py-0.5 text-primary">{formatOffset(event)}</span>

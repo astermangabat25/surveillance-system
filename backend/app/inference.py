@@ -163,17 +163,17 @@ def _infer_config_path() -> Path:
 
     occlusion_repo = _occlusion_repo_dir()
     preferred_candidates = [
-        INFERENCE_CONFIGS_DIR / "rtdetr_r50_final.yml",
-        INFERENCE_CONFIGS_DIR / "rtdetr_custom.yml",
-        INFERENCE_CONFIGS_DIR / "custom_rtdetr_r101vd_6x_coco.yml",
-        INFERENCE_CONFIGS_DIR / "rtdetr_r50vd_6x_coco.yml",
         occlusion_repo / "configs" / "rtdetr" / "rtdetr_r50_final.yml",
         occlusion_repo / "configs" / "rtdetr" / "rtdetr_custom.yml",
         occlusion_repo / "configs" / "rtdetr" / "custom_rtdetr_r101vd_6x_coco.yml",
         occlusion_repo / "configs" / "rtdetr" / "others" / "rtdetr_r50vd_6x_coco.yml",
+        INFERENCE_CONFIGS_DIR / "rtdetr_r50_final.yml",
+        INFERENCE_CONFIGS_DIR / "rtdetr_custom.yml",
+        INFERENCE_CONFIGS_DIR / "custom_rtdetr_r101vd_6x_coco.yml",
+        INFERENCE_CONFIGS_DIR / "rtdetr_r50vd_6x_coco.yml",
     ]
 
-    for candidate in preferred_candidates[:4]:
+    for candidate in preferred_candidates:
         if candidate.exists():
             return candidate
 
