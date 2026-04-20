@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useEffect, useState } from "react"
+import { useCallback, useEffect, useMemo, useState } from "react"
 import { KPICards } from "@/components/dashboard/kpi-cards"
 import { PedestrianChart } from "@/components/dashboard/pedestrian-chart"
 import { OcclusionTrendsChart } from "../../components/dashboard/occlusion-trends-chart"
@@ -65,10 +65,14 @@ const TIME_RANGE_OPTIONS = [
 
 const START_TIME_OPTIONS = Array.from({ length: 48 }, (_, index) => {
   const totalMinutes = index * 30
-  const hours = String(Math.floor(totalMinutes / 60)).padStart(2, "0")
+  const hour24 = Math.floor(totalMinutes / 60)
+  const hours = String(hour24).padStart(2, "0")
   const minutes = String(totalMinutes % 60).padStart(2, "0")
   const value = `${hours}:${minutes}`
-  return { value, label: value }
+  const suffix = hour24 >= 12 ? "PM" : "AM"
+  const hour12 = hour24 % 12 || 12
+  const label = `${hour12}:${minutes} ${suffix}`
+  return { value, label }
 })
 
 const getCurrentLocalDate = () => {
@@ -100,8 +104,7 @@ export default function DashboardPage() {
   const { settledUploadsVersion } = useUploadQueue()
   const [selectedDate, setSelectedDate] = useState("")
   const [timeRange, setTimeRange] = useState("12h")
-  const [startTime, setStartTime] = useState("00:00")
-  const [hourFilter, setHourFilter] = useState("all")
+  const [startTime, setStartTime] = useState("06:00")
   const [focusTime, setFocusTime] = useState<string | undefined>(undefined)
   const [zoomLevel, setZoomLevel] = useState(0)
   const [vehicleChartType, setVehicleChartType] = useState<"line" | "bar">("line")
@@ -122,6 +125,7 @@ export default function DashboardPage() {
   const [synthesis, setSynthesis] = useState<AISynthesisResponse | null>(null)
   const [locations, setLocations] = useState<LocationRecord[]>([])
   const [selectedLocationId, setSelectedLocationId] = useState<string>("")
+  const [userSelectedDate, setUserSelectedDate] = useState(false)
   const [userSelectedLocation, setUserSelectedLocation] = useState(false)
   const [footageDates, setFootageDates] = useState<string[]>([])
   const [modelInfo, setModelInfo] = useState<ModelInfo | null>(null)
@@ -135,10 +139,6 @@ export default function DashboardPage() {
   const [modelError, setModelError] = useState<string | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
   const [requirementUploadMessage, setRequirementUploadMessage] = useState<string | null>(null)
-
-  useEffect(() => {
-    setSelectedDate(getCurrentLocalDate())
-  }, [])
 
   const loadDashboard = useCallback(async () => {
     if (!selectedDate) {
@@ -207,26 +207,36 @@ export default function DashboardPage() {
     try {
       const response = await getLocations()
       setLocations(response)
+
+      const allDates = Array.from(new Set(response.flatMap((location) => location.videos.map((video) => video.date)))).sort()
+      const latestFootageDate = allDates.at(-1)
+      const fallbackDate = getCurrentLocalDate()
+      const preferredDate = latestFootageDate ?? fallbackDate
+
+      setFootageDates(allDates)
+
+      if (!userSelectedDate || !selectedDate) {
+        setSelectedDate(preferredDate)
+      }
+
       if (response.length === 0) {
-        setFootageDates([])
         setSelectedLocationId("")
         return
       }
 
-      const preferredLocationId = pickPreferredLocationId(response, selectedDate)
+      const effectiveDate = userSelectedDate && selectedDate ? selectedDate : preferredDate
+      const preferredLocationId = pickPreferredLocationId(response, effectiveDate)
       const currentSelection = response.find((location) => location.id === selectedLocationId)
 
       if (!currentSelection) {
         setSelectedLocationId(preferredLocationId)
-      } else if (!userSelectedLocation && !hasFootageForDate(currentSelection, selectedDate)) {
+      } else if (!userSelectedLocation && !hasFootageForDate(currentSelection, effectiveDate)) {
         setSelectedLocationId(preferredLocationId)
       }
-
-      setFootageDates(Array.from(new Set(response.flatMap((location) => location.videos.map((video) => video.date)))).sort())
     } catch {
       // Leave existing date highlights untouched if this auxiliary request fails.
     }
-  }, [selectedDate, selectedLocationId, userSelectedLocation])
+  }, [selectedDate, selectedLocationId, userSelectedDate, userSelectedLocation])
 
   useEffect(() => {
     void loadDashboard()
@@ -248,12 +258,6 @@ export default function DashboardPage() {
     void loadDashboard()
     void loadFootageDates()
   }, [loadDashboard, loadFootageDates, settledUploadsVersion])
-
-  useEffect(() => {
-    if (hourFilter !== "all" && !occlusion?.availableHours.includes(hourFilter)) {
-      setHourFilter("all")
-    }
-  }, [hourFilter, occlusion])
 
   const handleModelUpload = async () => {
     if (!modelFile || !selectedInferConfig) {
@@ -324,7 +328,35 @@ export default function DashboardPage() {
   const missingRequiredPath = inferenceStatus?.missingFixedPath
   const bannerError = dashboardError ?? modelError ?? actionError
 
+  const selectedDateClipCount = useMemo(
+    () => locations.reduce((count, location) => count + location.videos.filter((video) => video.date === selectedDate).length, 0),
+    [locations, selectedDate],
+  )
+
+  const averageLosLabel = useMemo(() => {
+    const losValues = (losTraffic?.series ?? [])
+      .map((point) => point.los)
+      .filter((value): value is number => typeof value === "number" && Number.isFinite(value))
+
+    if (losValues.length === 0) {
+      return "--"
+    }
+
+    const averageRank = Math.round(losValues.reduce((sum, value) => sum + value, 0) / losValues.length)
+    const losByRank: Record<number, string> = {
+      1: "A",
+      2: "B",
+      3: "C",
+      4: "D",
+      5: "E",
+      6: "F",
+    }
+
+    return losByRank[averageRank] ?? "--"
+  }, [losTraffic])
+
   const handleDateChange = (value: string) => {
+    setUserSelectedDate(true)
     setSelectedDate(value)
     setUserSelectedLocation(false)
     setFocusTime(undefined)
@@ -371,7 +403,7 @@ export default function DashboardPage() {
         <div className="mx-auto flex w-full max-w-7xl flex-col gap-4">
           <div className="shrink-0">
             <h1 className="text-xl font-semibold text-foreground">System Analytics Dashboard</h1>
-            <p className="text-sm text-muted-foreground">Real-time pedestrian tracking metrics</p>
+            <p className="text-sm text-muted-foreground">Real-time vehicle movement and LOS metrics</p>
           </div>
 
           <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_auto] xl:items-center xl:gap-4">
@@ -439,7 +471,7 @@ export default function DashboardPage() {
               <DialogHeader>
                 <DialogTitle className="text-foreground">Detection Model Settings</DialogTitle>
                 <DialogDescription className="text-muted-foreground">
-                  Upload a PyTorch model file (.pt or .pth) for pedestrian detection
+                    Upload a PyTorch model file (.pt or .pth) for vehicle detection
                 </DialogDescription>
               </DialogHeader>
 
@@ -627,7 +659,12 @@ export default function DashboardPage() {
           </div>
         )}
 
-        <KPICards summary={summary} loading={dashboardLoading} />
+        <KPICards
+          summary={summary}
+          loading={dashboardLoading}
+          footageClipCount={selectedDateClipCount}
+          averageLos={averageLosLabel}
+        />
 
         <div className="grid grid-cols-1 gap-6 xl:grid-cols-[65%_35%]">
           <div className="space-y-6">
@@ -712,7 +749,7 @@ export default function DashboardPage() {
               onChartTypeChange={setInOutChartType}
             />
           </div>
-          <OcclusionMap hourFilter={hourFilter} onHourFilterChange={setHourFilter} data={occlusion} loading={dashboardLoading} selectedDate={selectedDate} />
+          <OcclusionMap data={occlusion} loading={dashboardLoading} selectedDate={selectedDate} />
         </div>
 
         <AISynthesis selectedDate={selectedDate} timeRange={timeRange} data={synthesis} loading={dashboardLoading} />

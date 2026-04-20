@@ -71,6 +71,18 @@ const LOS_LABEL_BY_RANK: Record<number, string> = {
   6: "F",
 }
 
+const LOS_TICKS = [1, 2, 3, 4, 5, 6]
+
+function losYAxisDomainForChart(chartKind: "bar" | "line" | "area") {
+  if (chartKind === "bar") {
+    // Keep zero baseline so LOS=A bars (value 1) render with visible height.
+    return [0, 6] as const
+  }
+
+  // Add headroom so LOS=A points are not clipped to the lower axis edge.
+  return [0.5, 6.5] as const
+}
+
 type LineDotProps = {
   cx?: number
   cy?: number
@@ -410,8 +422,8 @@ export function PedestrianChart({
                     stroke="#71717A"
                     tick={{ fill: "#71717A", fontSize: 12 }}
                     axisLine={{ stroke: "#27272A" }}
-                    domain={isLosMetric ? [1, 6] : undefined}
-                    ticks={isLosMetric ? [1, 2, 3, 4, 5, 6] : undefined}
+                    domain={isLosMetric ? losYAxisDomainForChart("bar") : undefined}
+                    ticks={isLosMetric ? LOS_TICKS : undefined}
                     tickFormatter={isLosMetric ? (value) => LOS_LABEL_BY_RANK[Number(value)] ?? String(value) : undefined}
                     label={{ value: metricLabel, angle: -90, position: "insideLeft", fill: "#71717A", fontSize: 12 }}
                   />
@@ -434,8 +446,8 @@ export function PedestrianChart({
                     stroke="#71717A"
                     tick={{ fill: "#71717A", fontSize: 12 }}
                     axisLine={{ stroke: "#27272A" }}
-                    domain={isLosMetric ? [1, 6] : undefined}
-                    ticks={isLosMetric ? [1, 2, 3, 4, 5, 6] : undefined}
+                    domain={isLosMetric ? losYAxisDomainForChart("line") : undefined}
+                    ticks={isLosMetric ? LOS_TICKS : undefined}
                     tickFormatter={isLosMetric ? (value) => LOS_LABEL_BY_RANK[Number(value)] ?? String(value) : undefined}
                     label={{ value: metricLabel, angle: -90, position: "insideLeft", fill: "#71717A", fontSize: 12 }}
                   />
@@ -491,8 +503,8 @@ export function PedestrianChart({
                     stroke="#71717A"
                     tick={{ fill: "#71717A", fontSize: 12 }}
                     axisLine={{ stroke: "#27272A" }}
-                    domain={isLosMetric ? [1, 6] : undefined}
-                    ticks={isLosMetric ? [1, 2, 3, 4, 5, 6] : undefined}
+                    domain={isLosMetric ? losYAxisDomainForChart("area") : undefined}
+                    ticks={isLosMetric ? LOS_TICKS : undefined}
                     tickFormatter={isLosMetric ? (value) => LOS_LABEL_BY_RANK[Number(value)] ?? String(value) : undefined}
                     label={{ value: metricLabel, angle: -90, position: "insideLeft", fill: "#71717A", fontSize: 12 }}
                   />
@@ -515,7 +527,7 @@ export function PedestrianChart({
           </ResponsiveContainer>
         ) : (
           <div className="flex h-full items-center justify-center rounded-2xl border border-dashed border-border text-muted-foreground">
-            No pedestrian analytics are available for this time range yet.
+            No vehicle analytics are available for this time range yet.
           </div>
         )}
       </div>

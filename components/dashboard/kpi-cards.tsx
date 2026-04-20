@@ -1,27 +1,29 @@
 "use client"
 
-import { AlertTriangle, Car, MapPin, ScanLine } from "lucide-react"
+import { Activity, Car, MapPin, Video } from "lucide-react"
 import type { DashboardSummary } from "@/lib/api"
 
 interface KPICardsProps {
   summary?: DashboardSummary | null
   loading?: boolean
+  footageClipCount?: number
+  averageLos?: string
 }
 
-export function KPICards({ summary, loading = false }: KPICardsProps) {
+export function KPICards({ summary, loading = false, footageClipCount = 0, averageLos = "--" }: KPICardsProps) {
   const kpis = [
     {
-      label: "Tracked Pedestrians",
+      label: "Tracked Vehicles",
       value: loading ? "--" : (summary?.totalUniquePedestrians ?? 0).toLocaleString(),
-      hint: "All unique pedestrian tracks counted for the selected date",
+      hint: "All unique vehicle tracks counted for the selected date",
       icon: Car,
       color: "primary",
     },
     {
-      label: "Average FPS",
-      value: loading ? "--" : `${summary?.averageFps?.toFixed(1) ?? "0.0"}`,
-      hint: "Current processing throughput",
-      icon: ScanLine,
+      label: "Footage Clips",
+      value: loading ? "--" : `${footageClipCount}`,
+      hint: "Uploaded clips available for the selected date",
+      icon: Video,
       color: "accent",
     },
     {
@@ -32,10 +34,10 @@ export function KPICards({ summary, loading = false }: KPICardsProps) {
       color: "chart-3",
     },
     {
-      label: "Heavy Occlusions",
-      value: loading ? "--" : `${summary?.totalHeavyOcclusions ?? 0}`,
-      hint: "Events requiring review",
-      icon: AlertTriangle,
+      label: "Average LOS",
+      value: loading ? "--" : averageLos,
+      hint: "Mean Level of Service grade across the current time window",
+      icon: Activity,
       color: "chart-4",
     },
   ]
