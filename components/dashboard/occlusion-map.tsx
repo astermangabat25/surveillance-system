@@ -7,9 +7,23 @@ interface OcclusionMapProps {
   data?: PTSIMapResponse | null
   loading?: boolean
   selectedDate?: string
+  focusTime?: string
+  timeRange?: string
+  startTime?: string
+  zoomLevel?: number
+  selectedLocationId?: string
 }
 
-export function OcclusionMap({ data, loading = false, selectedDate }: OcclusionMapProps) {
+export function OcclusionMap({
+  data,
+  loading = false,
+  selectedDate,
+  focusTime,
+  timeRange,
+  startTime,
+  zoomLevel,
+  selectedLocationId,
+}: OcclusionMapProps) {
 
   return (
     <div className="rounded-3xl border border-border bg-card p-6 shadow-elevated">
@@ -24,6 +38,11 @@ export function OcclusionMap({ data, loading = false, selectedDate }: OcclusionM
         <CampusOsmMap
           selectedDate={selectedDate}
           occlusionData={data}
+          focusTime={focusTime}
+          timeRange={timeRange}
+          startTime={startTime}
+          zoomLevel={zoomLevel}
+          selectedLocationId={selectedLocationId}
           className="h-[clamp(16rem,42vh,30rem)] w-full rounded-2xl border border-border"
         />
         {loading && (

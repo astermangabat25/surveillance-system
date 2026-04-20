@@ -75,6 +75,28 @@ const START_TIME_OPTIONS = Array.from({ length: 48 }, (_, index) => {
   return { value, label }
 })
 
+const LOS_BY_NUMERIC_RANK: Record<number, string> = {
+  1: "A",
+  2: "B",
+  3: "C",
+  4: "D",
+  5: "E",
+  6: "F",
+}
+
+const deriveLosGradeFromSeries = (series?: TrafficResponse["series"]): string | null => {
+  const losValues = (series ?? [])
+    .map((point) => point.los)
+    .filter((value): value is number => typeof value === "number" && Number.isFinite(value))
+
+  if (losValues.length === 0) {
+    return null
+  }
+
+  const averageRank = Math.round(losValues.reduce((sum, value) => sum + value, 0) / losValues.length)
+  return LOS_BY_NUMERIC_RANK[averageRank] ?? null
+}
+
 const getCurrentLocalDate = () => {
   const now = new Date()
   const timezoneOffsetMilliseconds = now.getTimezoneOffset() * 60 * 1000
@@ -334,25 +356,7 @@ export default function DashboardPage() {
   )
 
   const averageLosLabel = useMemo(() => {
-    const losValues = (losTraffic?.series ?? [])
-      .map((point) => point.los)
-      .filter((value): value is number => typeof value === "number" && Number.isFinite(value))
-
-    if (losValues.length === 0) {
-      return "--"
-    }
-
-    const averageRank = Math.round(losValues.reduce((sum, value) => sum + value, 0) / losValues.length)
-    const losByRank: Record<number, string> = {
-      1: "A",
-      2: "B",
-      3: "C",
-      4: "D",
-      5: "E",
-      6: "F",
-    }
-
-    return losByRank[averageRank] ?? "--"
+    return deriveLosGradeFromSeries(losTraffic?.series) ?? "--"
   }, [losTraffic])
 
   const handleDateChange = (value: string) => {
@@ -749,7 +753,16 @@ export default function DashboardPage() {
               onChartTypeChange={setInOutChartType}
             />
           </div>
-          <OcclusionMap data={occlusion} loading={dashboardLoading} selectedDate={selectedDate} />
+          <OcclusionMap
+            data={occlusion}
+            loading={dashboardLoading}
+            selectedDate={selectedDate}
+            focusTime={focusTime}
+            timeRange={timeRange}
+            startTime={startTime}
+            zoomLevel={zoomLevel}
+            selectedLocationId={selectedLocationId}
+          />
         </div>
 
         <AISynthesis selectedDate={selectedDate} timeRange={timeRange} data={synthesis} loading={dashboardLoading} />
