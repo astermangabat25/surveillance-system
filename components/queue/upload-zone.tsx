@@ -8,10 +8,9 @@ interface QueueUploadZoneProps {
   activeCount: number
   queuedCount: number
   completedCount: number
-  maxConcurrentUploads: number
 }
 
-export function QueueUploadZone({ activeCount, queuedCount, completedCount, maxConcurrentUploads }: QueueUploadZoneProps) {
+export function QueueUploadZone({ activeCount, queuedCount, completedCount }: QueueUploadZoneProps) {
   const uploadHref = "/?openAddVideo=1"
 
   return (
@@ -34,7 +33,7 @@ export function QueueUploadZone({ activeCount, queuedCount, completedCount, maxC
               .
             </p>
             <p className="mt-2 text-sm text-muted-foreground">
-              Background uploads continue here while you browse. Up to {maxConcurrentUploads} videos can run at the same time.
+              Background uploads continue here while you browse.
             </p>
           </div>
         </div>

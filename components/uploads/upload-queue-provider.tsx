@@ -4,7 +4,6 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { cancelVideoUpload, getVideoUploadHistory, getVideoUploadStatus, uploadVideo, type VideoUploadStatus } from "@/lib/api"
 import { WalkingLoader } from "@/components/ui/walking-loader"
 
-const MAX_CONCURRENT_UPLOADS = 2
 const UPLOAD_QUEUE_STORAGE_KEY = "alive-upload-queue"
 const DISMISSED_UPLOAD_IDS_STORAGE_KEY = "alive-dismissed-upload-ids"
 const REHYDRATION_POLL_INTERVAL_MS = 1_000
@@ -71,7 +70,6 @@ interface UploadQueueContextValue {
   completedCount: number
   hasActiveUploads: boolean
   settledUploadsVersion: number
-  maxConcurrentUploads: number
 }
 
 const UploadQueueContext = createContext<UploadQueueContextValue | null>(null)
@@ -753,12 +751,6 @@ export function UploadQueueProvider({ children }: { children: ReactNode }) {
   )
 
   useEffect(() => {
-    const activeUploads = uploads.filter((upload) => upload.startedAt && !isTerminalState(upload.state)).length
-    const availableSlots = MAX_CONCURRENT_UPLOADS - activeUploads
-    if (availableSlots <= 0) {
-      return
-    }
-
     const pendingUploads = uploads.filter(
       (upload) =>
         Boolean(upload.file) &&
@@ -768,7 +760,7 @@ export function UploadQueueProvider({ children }: { children: ReactNode }) {
         !launchingIdsRef.current.has(upload.id),
     )
 
-    pendingUploads.slice(0, availableSlots).forEach((upload) => {
+    pendingUploads.forEach((upload) => {
       launchingIdsRef.current.add(upload.id)
       void runUpload(upload.id).finally(() => {
         launchingIdsRef.current.delete(upload.id)
@@ -875,7 +867,6 @@ export function UploadQueueProvider({ children }: { children: ReactNode }) {
       completedCount,
       hasActiveUploads: activeCount > 0,
       settledUploadsVersion,
-      maxConcurrentUploads: MAX_CONCURRENT_UPLOADS,
     }),
     [activeCount, cancelUpload, clearQueue, completedCount, enqueueUploads, queuedCount, settledUploadsVersion, sortedUploads],
   )

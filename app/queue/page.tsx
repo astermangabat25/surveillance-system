@@ -18,7 +18,7 @@ import { Button } from "@/components/ui/button"
 import { ChevronLeft, FileVideo } from "lucide-react"
 
 export default function QueuePage() {
-  const { uploads, cancelUpload, clearQueue, activeCount, queuedCount, completedCount } = useUploadQueue()
+  const { uploads, cancelUpload, clearQueue, activeCount, completedCount } = useUploadQueue()
   const [pendingCancelId, setPendingCancelId] = useState<string | null>(null)
   const [isClearDialogOpen, setIsClearDialogOpen] = useState(false)
   const [isCancelling, setIsCancelling] = useState(false)
@@ -76,14 +76,10 @@ export default function QueuePage() {
       </header>
 
       <div className="mx-auto max-w-4xl p-6">
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-4">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
           <div className="rounded-2xl border border-border bg-card px-4 py-3 shadow-elevated-sm">
             <p className="text-sm text-muted-foreground">Active</p>
             <p className="mt-1 text-2xl font-semibold text-white">{activeCount}</p>
-          </div>
-          <div className="rounded-2xl border border-border bg-card px-4 py-3 shadow-elevated-sm">
-            <p className="text-sm text-muted-foreground">Queued</p>
-            <p className="mt-1 text-2xl font-semibold text-white">{queuedCount}</p>
           </div>
           <div className="rounded-2xl border border-border bg-card px-4 py-3 shadow-elevated-sm">
             <p className="text-sm text-muted-foreground">Completed</p>
