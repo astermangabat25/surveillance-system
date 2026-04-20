@@ -1,7 +1,7 @@
 "use client"
 
 import Link from "next/link"
-import { MoreHorizontal, ScanLine, Video, Wifi } from "lucide-react"
+import { Video, Wifi } from "lucide-react"
 
 interface VideoThumbnailProps {
   id: string
@@ -15,7 +15,7 @@ interface VideoThumbnailProps {
 }
 
 export function VideoThumbnail({ id, location, timestamp, date, pedestrianCount, mediaUrl, rawPath, processedPath }: VideoThumbnailProps) {
-  const statusLabel = processedPath ? "Annotated" : rawPath ? "Uploaded" : "Sample"
+  const statusLabel = rawPath ? "Uploaded" : "Sample"
   const previewLabel = processedPath ? "Processed view" : rawPath ? "Raw view" : "Preview unavailable"
 
   return (
@@ -38,26 +38,19 @@ export function VideoThumbnail({ id, location, timestamp, date, pedestrianCount,
       <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/20 to-black/10" />
 
       {/* Status Indicators */}
-      <div className="absolute top-3 left-3 flex items-center gap-2">
-        <div className="flex items-center gap-1.5 px-2 py-1 rounded-full bg-black/50 backdrop-blur-sm">
-          <Wifi className="w-3 h-3 text-accent" />
-          <span className="text-[10px] text-white font-medium">{statusLabel}</span>
-        </div>
-        {processedPath && (
-          <div className="flex items-center gap-1.5 rounded-full bg-primary/80 px-2 py-1 text-[10px] font-medium text-primary-foreground">
-            <ScanLine className="h-3 w-3" />
-            Tracking View
+      {!processedPath && (
+        <div className="absolute top-3 left-3 flex items-center gap-2">
+          <div className="flex items-center gap-1.5 px-2 py-1 rounded-full bg-black/50 backdrop-blur-sm">
+            <Wifi className="w-3 h-3 text-accent" />
+            <span className="text-[10px] text-white font-medium">{statusLabel}</span>
           </div>
-        )}
-      </div>
+        </div>
+      )}
 
-      {/* Pedestrian Count */}
-      <div className="absolute top-3 right-3 flex items-center gap-2">
+      {/* Vehicle Count */}
+      <div className={`absolute top-3 flex items-center gap-2 ${processedPath ? "left-3" : "right-3"}`}>
         <span className="text-xs font-bold text-white bg-primary/80 backdrop-blur-sm px-2.5 py-1 rounded-full">
-          {pedestrianCount}
-        </span>
-        <span className="text-white/70 p-1 rounded-full bg-black/30 backdrop-blur-sm">
-          <MoreHorizontal className="w-4 h-4" />
+          {pedestrianCount} vehicles
         </span>
       </div>
 
