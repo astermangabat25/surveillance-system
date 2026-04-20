@@ -410,6 +410,7 @@ export function UploadQueueProvider({ children }: { children: ReactNode }) {
   const [settledUploadsVersion, setSettledUploadsVersion] = useState(0)
   const uploadsRef = useRef<UploadQueueItem[]>([])
   const launchingIdsRef = useRef(new Set<string>())
+  const cancelDispatchInFlightRef = useRef(new Set<string>())
   const settledIdsRef = useRef(new Set<string>())
   const dismissedUploadIdsRef = useRef(new Set<string>())
   const hasHydratedRef = useRef(false)
@@ -505,6 +506,46 @@ export function UploadQueueProvider({ children }: { children: ReactNode }) {
       currentUploads.map((upload) => (upload.id === queueItemId ? updater(upload) : upload)),
     )
   }, [])
+
+  const requestBackendCancellation = useCallback(
+    async (queueItemId: string, uploadId: string) => {
+      const dispatchKey = `${queueItemId}:${uploadId}`
+      if (cancelDispatchInFlightRef.current.has(dispatchKey)) {
+        return
+      }
+
+      cancelDispatchInFlightRef.current.add(dispatchKey)
+      try {
+        const status = await cancelVideoUpload(uploadId)
+        updateUpload(queueItemId, (current) => ({
+          ...current,
+          uploadId: status.uploadId,
+          state: status.state,
+          progressPercent: status.progressPercent ?? current.progressPercent,
+          message: status.message,
+          phase: status.phase ?? current.phase,
+          videoId: status.videoId ?? current.videoId,
+          error: status.error ?? current.error,
+          updatedAt: status.updatedAt,
+          completedAt: isTerminalState(status.state) ? status.updatedAt : current.completedAt,
+          cancellationRequested: !isTerminalState(status.state),
+        }))
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Failed to cancel upload."
+        updateUpload(queueItemId, (current) => ({
+          ...current,
+          cancellationRequested: false,
+          error: message,
+          message,
+          updatedAt: new Date().toISOString(),
+        }))
+        throw error
+      } finally {
+        cancelDispatchInFlightRef.current.delete(dispatchKey)
+      }
+    },
+    [updateUpload],
+  )
 
   useEffect(() => {
     const strandedUploadIds = uploads
@@ -615,6 +656,21 @@ export function UploadQueueProvider({ children }: { children: ReactNode }) {
       window.clearInterval(intervalId)
     }
   }, [])
+
+  useEffect(() => {
+    uploads.forEach((upload) => {
+      if (
+        !upload.cancellationRequested ||
+        !upload.uploadId ||
+        isTerminalState(upload.state) ||
+        messageRequestsCancellation(upload.message)
+      ) {
+        return
+      }
+
+      void requestBackendCancellation(upload.id, upload.uploadId)
+    })
+  }, [requestBackendCancellation, uploads])
 
   const runUpload = useCallback(
     async (queueItemId: string) => {
@@ -746,7 +802,7 @@ export function UploadQueueProvider({ children }: { children: ReactNode }) {
 
       const updatedAt = new Date().toISOString()
 
-      if (!upload.startedAt || !upload.uploadId) {
+      if (!upload.startedAt) {
         updateUpload(queueItemId, (current) => ({
           ...current,
           state: "cancelled",
@@ -759,6 +815,16 @@ export function UploadQueueProvider({ children }: { children: ReactNode }) {
         return
       }
 
+      if (!upload.uploadId) {
+        updateUpload(queueItemId, (current) => ({
+          ...current,
+          cancellationRequested: true,
+          message: "Cancellation requested. Waiting for upload session...",
+          updatedAt,
+        }))
+        return
+      }
+
       updateUpload(queueItemId, (current) => ({
         ...current,
         cancellationRequested: true,
@@ -767,33 +833,12 @@ export function UploadQueueProvider({ children }: { children: ReactNode }) {
       }))
 
       try {
-        const status = await cancelVideoUpload(upload.uploadId)
-        updateUpload(queueItemId, (current) => ({
-          ...current,
-          uploadId: status.uploadId,
-          state: status.state,
-          progressPercent: status.progressPercent ?? current.progressPercent,
-          message: status.message,
-          phase: status.phase ?? current.phase,
-          videoId: status.videoId ?? current.videoId,
-          error: status.error ?? current.error,
-          updatedAt: status.updatedAt,
-          completedAt: isTerminalState(status.state) ? status.updatedAt : current.completedAt,
-          cancellationRequested: true,
-        }))
+        await requestBackendCancellation(queueItemId, upload.uploadId)
       } catch (error) {
-        const message = error instanceof Error ? error.message : "Failed to cancel upload."
-        updateUpload(queueItemId, (current) => ({
-          ...current,
-          cancellationRequested: false,
-          error: message,
-          message,
-          updatedAt: new Date().toISOString(),
-        }))
         throw error
       }
     },
-    [updateUpload],
+    [requestBackendCancellation, updateUpload],
   )
 
   const clearQueue = useCallback(() => {

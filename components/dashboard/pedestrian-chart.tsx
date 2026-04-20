@@ -374,6 +374,17 @@ export function PedestrianChart({
                       stroke={lineColorBySeriesKey[series.key] ?? series.color}
                       strokeWidth={2.5}
                       dot={(props: LineDotProps) => {
+                        const value = props?.payload?.[series.key]
+                        const hasRenderableValue =
+                          typeof value === "number" &&
+                          Number.isFinite(value) &&
+                          Number.isFinite(props.cx) &&
+                          Number.isFinite(props.cy)
+
+                        if (!hasRenderableValue) {
+                          return null
+                        }
+
                         const losValue = props?.payload?.[`${series.key}__los`]
                         const pointColor = typeof losValue === "string" ? (LOS_COLOR_MAP[losValue] ?? series.color) : series.color
                         return (
@@ -387,20 +398,7 @@ export function PedestrianChart({
                           />
                         )
                       }}
-                      activeDot={(props: LineDotProps) => {
-                        const losValue = props?.payload?.[`${series.key}__los`]
-                        const pointColor = typeof losValue === "string" ? (LOS_COLOR_MAP[losValue] ?? series.color) : series.color
-                        return (
-                          <circle
-                            key={lineDotKey(series.key, "activeDot", props)}
-                            cx={props.cx}
-                            cy={props.cy}
-                            r={4}
-                            fill={pointColor}
-                            stroke={pointColor}
-                          />
-                        )
-                      }}
+                      activeDot={false}
                       connectNulls
                     />
                   ))}
@@ -478,7 +476,7 @@ export function PedestrianChart({
                         />
                       )
                     }) : false}
-                    activeDot={{ r: 4, fill: seriesColor }}
+                    activeDot={false}
                     cursor={canZoomIn ? "pointer" : "default"}
                   />
                 </LineChart>

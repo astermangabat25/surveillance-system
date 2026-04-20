@@ -9,7 +9,7 @@ import { EventFeed } from "@/components/surveillance/event-feed"
 import { AISearchBar } from "@/components/surveillance/ai-search-bar"
 import { Button } from "@/components/ui/button"
 import { Switch } from "@/components/ui/switch"
-import { AlertCircle, ArrowLeft, BarChart3, Car, Download, Gauge, Loader2, OctagonAlert, Share2, Trash2 } from "lucide-react"
+import { AlertCircle, ArrowLeft, BarChart3, Car, Download, Gauge, Loader2, OctagonAlert, Trash2 } from "lucide-react"
 import { deleteVideo, getEvents, getLocations, getMediaUrl, getVideo, getVideoPlaybackPath, type EventRecord, type LocationRecord, type VideoDetailRecord, type VideoPedestrianTrackRecord, type VideoSeverityBucket } from "@/lib/api"
 
 type LOSLevel = "A" | "B" | "C" | "D" | "E" | "F"
@@ -805,18 +805,6 @@ function VideoDetailContent({ params }: { params: Promise<{ id: string }> }) {
             >
               {deleting ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Trash2 className="w-4 h-4 mr-2" />}
               Delete
-            </Button>
-            <Button
-              variant="outline"
-              className="border-border text-foreground hover:bg-secondary rounded-2xl"
-              onClick={() => {
-                if (typeof window !== "undefined") {
-                  void navigator.clipboard.writeText(window.location.href)
-                }
-              }}
-            >
-              <Share2 className="w-4 h-4 mr-2" />
-              Copy Link
             </Button>
             {mediaUrl ? (
               <Button asChild className="bg-primary text-primary-foreground hover:bg-primary/90 rounded-2xl">

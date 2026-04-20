@@ -185,6 +185,12 @@ export function QueueItem({ upload, onCancelRequest }: QueueItemProps) {
             </span>
           </div>
 
+          {upload.state !== "error" && upload.message ? (
+            <p className="mt-1 text-xs text-muted-foreground">
+              Inference status: {upload.message}
+            </p>
+          ) : null}
+
           {upload.state === "error" ? (
             <div className="mt-2 rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2">
               <div className="flex items-center justify-between gap-3">

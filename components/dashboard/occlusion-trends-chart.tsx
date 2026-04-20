@@ -184,7 +184,7 @@ export function OcclusionTrendsChart({
                     stroke={series.color}
                     strokeWidth={2.5}
                     dot={false}
-                    activeDot={{ r: 4, fill: series.color }}
+                    activeDot={false}
                   />
                 ))}
               </LineChart>

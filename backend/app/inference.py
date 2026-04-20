@@ -4,6 +4,7 @@ import colorsys
 import csv
 import os
 import re
+import selectors
 import shutil
 import signal
 import subprocess
@@ -634,7 +635,7 @@ def _build_rtdetr_command(
 
 
 def _wait_for_process_with_cancellation(
-    process: subprocess.Popen[str],
+    process: subprocess.Popen[Any],
     *,
     progress_callback: Optional[Callable[[dict[str, Any]], None]],
     timeout_seconds: Optional[float] = None,
@@ -647,23 +648,107 @@ def _wait_for_process_with_cancellation(
         if timeout_seconds is not None
         else INFERENCE_MAX_RUNTIME_SECONDS
     )
+    stdout_chunks: list[str] = []
+    stderr_chunks: list[str] = []
+    stream_buffers: dict[str, str] = {"stdout": "", "stderr": ""}
+    last_emitted_status = ""
+    last_emitted_at = 0.0
+
+    selector = selectors.DefaultSelector()
+    if process.stdout is not None:
+        selector.register(process.stdout, selectors.EVENT_READ, data="stdout")
+    if process.stderr is not None:
+        selector.register(process.stderr, selectors.EVENT_READ, data="stderr")
+
+    def _emit_script_status(source: str, line: str) -> None:
+        nonlocal last_emitted_status, last_emitted_at
+        if progress_callback is None:
+            return
+
+        cleaned_line = line.strip()
+        if not cleaned_line:
+            return
+
+        now = time.monotonic()
+        status_line = f"RT-DETR {source}: {cleaned_line}"
+        if status_line == last_emitted_status and (now - last_emitted_at) < 0.5:
+            return
+
+        progress_callback(
+            {
+                "phase": "tracking",
+                "message": status_line,
+            }
+        )
+        last_emitted_status = status_line
+        last_emitted_at = now
+
+    def _drain_stream_event(source: str, stream_obj: Any) -> None:
+        try:
+            raw_chunk = os.read(stream_obj.fileno(), 4096)
+        except OSError:
+            raw_chunk = b""
+
+        if not raw_chunk:
+            try:
+                selector.unregister(stream_obj)
+            except Exception:
+                pass
+            return
+
+        text_chunk = raw_chunk.decode("utf-8", errors="replace")
+        if source == "stdout":
+            stdout_chunks.append(text_chunk)
+        else:
+            stderr_chunks.append(text_chunk)
+
+        normalized_chunk = text_chunk.replace("\r", "\n")
+        stream_buffers[source] += normalized_chunk
+        lines = stream_buffers[source].split("\n")
+        stream_buffers[source] = lines.pop() if lines else ""
+
+        for line in lines:
+            _emit_script_status(source, line)
+
     while True:
         _run_cancel_check(progress_callback)
-        try:
-            stdout, stderr = process.communicate(timeout=0.2)
-            return process.returncode or 0, stdout or "", stderr or ""
-        except subprocess.TimeoutExpired:
-            elapsed_seconds = time.monotonic() - started_at
-            if elapsed_seconds > effective_timeout_seconds:
-                _terminate_process(process)
-                model_label = model_name or "unknown-model"
-                config_label = infer_config_name or "unknown-config"
-                raise RuntimeError(
-                    "RT-DETR inference command timed out "
-                    f"after {effective_timeout_seconds:.1f} seconds "
-                    f"(model={model_label}, config={config_label})."
-                )
-            continue
+        events = selector.select(timeout=0.2)
+        for key, _mask in events:
+            source = str(key.data)
+            _drain_stream_event(source, key.fileobj)
+
+        if process.poll() is not None:
+            # Drain any remaining bytes and flush pending partial lines.
+            for source, stream_obj in (("stdout", process.stdout), ("stderr", process.stderr)):
+                if stream_obj is None:
+                    continue
+                while True:
+                    previous_size = len(stdout_chunks) + len(stderr_chunks)
+                    _drain_stream_event(source, stream_obj)
+                    current_size = len(stdout_chunks) + len(stderr_chunks)
+                    if current_size == previous_size:
+                        break
+
+            for source, trailing in stream_buffers.items():
+                _emit_script_status(source, trailing)
+
+            try:
+                selector.close()
+            except Exception:
+                pass
+
+            return process.returncode or 0, "".join(stdout_chunks), "".join(stderr_chunks)
+
+        elapsed_seconds = time.monotonic() - started_at
+        if elapsed_seconds > effective_timeout_seconds:
+            _terminate_process(process)
+            model_label = model_name or "unknown-model"
+            config_label = infer_config_name or "unknown-config"
+            raise RuntimeError(
+                "RT-DETR inference command timed out "
+                f"after {effective_timeout_seconds:.1f} seconds "
+                f"(model={model_label}, config={config_label})."
+            )
 
 
 def _runtime_timeout_seconds(video_path: Path) -> float:
@@ -1428,7 +1513,6 @@ def run_video_inference(
             cwd=str(_occlusion_repo_dir().resolve()),
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            text=True,
             start_new_session=True,
         )
 

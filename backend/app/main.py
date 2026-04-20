@@ -124,6 +124,21 @@ def _manual_duration_seconds(hours: Optional[int], minutes: Optional[int]) -> Op
     return total_seconds if total_seconds > 0 else None
 
 
+def _extract_tracking_progress_percent(message: str) -> Optional[int]:
+    # Matches tqdm-like fragments such as "1%|" or "56%|########".
+    match = re.search(r"\b(100|[1-9]?\d)%\|", message)
+    if not match:
+        return None
+
+    try:
+        raw_percent = int(match.group(1))
+    except (TypeError, ValueError):
+        return None
+
+    # Keep tracking progress below the post-processing stages (vision/finalizing).
+    return max(0, min(79, int(round((raw_percent / 100.0) * 79))))
+
+
 def search_google_places(query: str) -> list[dict[str, Any]]:
     api_key = os.getenv("GOOGLE_MAPS_API_KEY")
     if not api_key:
@@ -462,11 +477,16 @@ async def upload_video(
         def handle_processing_progress(payload: dict) -> None:
             ensure_not_cancelled()
             if uploadId:
+                message_text = str(payload.get("message") or "Processing video...")
+                payload_progress = payload.get("progressPercent")
+                inferred_tracking_progress = _extract_tracking_progress_percent(message_text)
+                resolved_progress = payload_progress if payload_progress is not None else inferred_tracking_progress
+
                 store.set_upload_status(
                     uploadId,
                     state="processing",
-                    progress_percent=payload.get("progressPercent"),
-                    message=str(payload.get("message") or "Processing video..."),
+                    progress_percent=resolved_progress,
+                    message=message_text,
                     phase=str(payload.get("phase") or "tracking"),
                     video_id=video["id"],
                 )
