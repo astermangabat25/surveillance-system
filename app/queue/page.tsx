@@ -18,7 +18,16 @@ import { Button } from "@/components/ui/button"
 import { ChevronLeft, FileVideo } from "lucide-react"
 
 export default function QueuePage() {
-  const { uploads, cancelUpload, clearQueue, activeCount, completedCount } = useUploadQueue()
+  const {
+    uploads,
+    cancelUpload,
+    clearQueue,
+    activeCount,
+    queuedCount,
+    completedCount,
+    maxConcurrentUploads,
+    setMaxConcurrentUploads,
+  } = useUploadQueue()
   const [pendingCancelId, setPendingCancelId] = useState<string | null>(null)
   const [isClearDialogOpen, setIsClearDialogOpen] = useState(false)
   const [isCancelling, setIsCancelling] = useState(false)
@@ -60,6 +69,30 @@ export default function QueuePage() {
             </div>
 
             <div className="hidden items-center gap-2 md:flex">
+              <div className="flex items-center gap-2 rounded-xl border border-border bg-card px-3 py-1.5">
+                <span className="text-xs text-muted-foreground">Max concurrent videos</span>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-7 w-7 rounded-md p-0"
+                  disabled={maxConcurrentUploads <= 1}
+                  onClick={() => setMaxConcurrentUploads(maxConcurrentUploads - 1)}
+                >
+                  -
+                </Button>
+                <span className="min-w-6 text-center text-sm font-semibold text-white">{maxConcurrentUploads}</span>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-7 w-7 rounded-md p-0"
+                  disabled={maxConcurrentUploads >= 16}
+                  onClick={() => setMaxConcurrentUploads(maxConcurrentUploads + 1)}
+                >
+                  +
+                </Button>
+              </div>
               <Button
                 type="button"
                 variant="outline"
@@ -76,10 +109,14 @@ export default function QueuePage() {
       </header>
 
       <div className="mx-auto max-w-4xl p-6">
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-4">
           <div className="rounded-2xl border border-border bg-card px-4 py-3 shadow-elevated-sm">
             <p className="text-sm text-muted-foreground">Active</p>
             <p className="mt-1 text-2xl font-semibold text-white">{activeCount}</p>
+          </div>
+          <div className="rounded-2xl border border-border bg-card px-4 py-3 shadow-elevated-sm">
+            <p className="text-sm text-muted-foreground">Queued</p>
+            <p className="mt-1 text-2xl font-semibold text-white">{queuedCount}</p>
           </div>
           <div className="rounded-2xl border border-border bg-card px-4 py-3 shadow-elevated-sm">
             <p className="text-sm text-muted-foreground">Completed</p>
@@ -106,16 +143,42 @@ export default function QueuePage() {
         </div>
 
         <div className="mt-4 flex md:hidden">
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            className="w-full rounded-xl"
-            disabled={terminalUploadsCount === 0}
-            onClick={() => setIsClearDialogOpen(true)}
-          >
-            Clear Queue
-          </Button>
+          <div className="flex w-full items-center gap-2">
+            <div className="flex flex-1 items-center justify-center gap-2 rounded-xl border border-border bg-card px-3 py-1.5">
+              <span className="text-xs text-muted-foreground">Max concurrent videos</span>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-7 w-7 rounded-md p-0"
+                disabled={maxConcurrentUploads <= 1}
+                onClick={() => setMaxConcurrentUploads(maxConcurrentUploads - 1)}
+              >
+                -
+              </Button>
+              <span className="min-w-6 text-center text-sm font-semibold text-white">{maxConcurrentUploads}</span>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-7 w-7 rounded-md p-0"
+                disabled={maxConcurrentUploads >= 16}
+                onClick={() => setMaxConcurrentUploads(maxConcurrentUploads + 1)}
+              >
+                +
+              </Button>
+            </div>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="rounded-xl"
+              disabled={terminalUploadsCount === 0}
+              onClick={() => setIsClearDialogOpen(true)}
+            >
+              Clear Queue
+            </Button>
+          </div>
         </div>
       </div>
 
@@ -148,7 +211,7 @@ export default function QueuePage() {
           <AlertDialogHeader>
             <AlertDialogTitle>Clear completed uploads?</AlertDialogTitle>
             <AlertDialogDescription>
-              This removes completed, failed, and cancelled items from the queue. Active and waiting uploads stay in place.
+              This clears finished items from the list. Videos that are still uploading or processing will stay.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

@@ -4,8 +4,12 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { cancelVideoUpload, getVideoUploadHistory, getVideoUploadStatus, uploadVideo, type VideoUploadStatus } from "@/lib/api"
 import { WalkingLoader } from "@/components/ui/walking-loader"
 
+const DEFAULT_MAX_CONCURRENT_UPLOADS = 2
+const MIN_CONCURRENT_UPLOADS = 1
+const MAX_CONCURRENT_UPLOADS = 16
 const UPLOAD_QUEUE_STORAGE_KEY = "alive-upload-queue"
 const DISMISSED_UPLOAD_IDS_STORAGE_KEY = "alive-dismissed-upload-ids"
+const MAX_CONCURRENT_UPLOADS_STORAGE_KEY = "alive-max-concurrent-uploads"
 const REHYDRATION_POLL_INTERVAL_MS = 1_000
 const HISTORY_REFRESH_INTERVAL_MS = 5_000
 
@@ -70,6 +74,8 @@ interface UploadQueueContextValue {
   completedCount: number
   hasActiveUploads: boolean
   settledUploadsVersion: number
+  maxConcurrentUploads: number
+  setMaxConcurrentUploads: (value: number) => void
 }
 
 const UploadQueueContext = createContext<UploadQueueContextValue | null>(null)
@@ -406,6 +412,7 @@ export function UploadQueueProvider({ children }: { children: ReactNode }) {
   const [uploads, setUploads] = useState<UploadQueueItem[]>([])
   const [overlayDismissed, setOverlayDismissed] = useState(false)
   const [settledUploadsVersion, setSettledUploadsVersion] = useState(0)
+  const [maxConcurrentUploads, setMaxConcurrentUploadsState] = useState(DEFAULT_MAX_CONCURRENT_UPLOADS)
   const uploadsRef = useRef<UploadQueueItem[]>([])
   const launchingIdsRef = useRef(new Set<string>())
   const cancelDispatchInFlightRef = useRef(new Set<string>())
@@ -474,6 +481,32 @@ export function UploadQueueProvider({ children }: { children: ReactNode }) {
       return
     }
 
+    const rawValue = window.localStorage.getItem(MAX_CONCURRENT_UPLOADS_STORAGE_KEY)
+    if (!rawValue) {
+      return
+    }
+
+    const parsedValue = Number.parseInt(rawValue, 10)
+    if (!Number.isFinite(parsedValue)) {
+      return
+    }
+
+    setMaxConcurrentUploadsState(Math.max(MIN_CONCURRENT_UPLOADS, Math.min(MAX_CONCURRENT_UPLOADS, parsedValue)))
+  }, [])
+
+  useEffect(() => {
+    if (!hasHydratedRef.current || typeof window === "undefined") {
+      return
+    }
+
+    window.localStorage.setItem(MAX_CONCURRENT_UPLOADS_STORAGE_KEY, String(maxConcurrentUploads))
+  }, [maxConcurrentUploads])
+
+  useEffect(() => {
+    if (!hasHydratedRef.current || typeof window === "undefined") {
+      return
+    }
+
     if (uploads.length === 0) {
       window.localStorage.removeItem(UPLOAD_QUEUE_STORAGE_KEY)
       return
@@ -503,6 +536,15 @@ export function UploadQueueProvider({ children }: { children: ReactNode }) {
     setUploads((currentUploads) =>
       currentUploads.map((upload) => (upload.id === queueItemId ? updater(upload) : upload)),
     )
+  }, [])
+
+  const setMaxConcurrentUploads = useCallback((value: number) => {
+    if (!Number.isFinite(value)) {
+      return
+    }
+
+    const normalizedValue = Math.round(value)
+    setMaxConcurrentUploadsState(Math.max(MIN_CONCURRENT_UPLOADS, Math.min(MAX_CONCURRENT_UPLOADS, normalizedValue)))
   }, [])
 
   const requestBackendCancellation = useCallback(
@@ -751,6 +793,12 @@ export function UploadQueueProvider({ children }: { children: ReactNode }) {
   )
 
   useEffect(() => {
+    const activeUploads = uploads.filter((upload) => upload.startedAt && !isTerminalState(upload.state)).length
+    const availableSlots = maxConcurrentUploads - activeUploads
+    if (availableSlots <= 0) {
+      return
+    }
+
     const pendingUploads = uploads.filter(
       (upload) =>
         Boolean(upload.file) &&
@@ -760,13 +808,13 @@ export function UploadQueueProvider({ children }: { children: ReactNode }) {
         !launchingIdsRef.current.has(upload.id),
     )
 
-    pendingUploads.forEach((upload) => {
+    pendingUploads.slice(0, availableSlots).forEach((upload) => {
       launchingIdsRef.current.add(upload.id)
       void runUpload(upload.id).finally(() => {
         launchingIdsRef.current.delete(upload.id)
       })
     })
-  }, [runUpload, uploads])
+  }, [maxConcurrentUploads, runUpload, uploads])
 
   useEffect(() => {
     if (uploads.some((upload) => !isTerminalState(upload.state))) {
@@ -867,8 +915,21 @@ export function UploadQueueProvider({ children }: { children: ReactNode }) {
       completedCount,
       hasActiveUploads: activeCount > 0,
       settledUploadsVersion,
+      maxConcurrentUploads,
+      setMaxConcurrentUploads,
     }),
-    [activeCount, cancelUpload, clearQueue, completedCount, enqueueUploads, queuedCount, settledUploadsVersion, sortedUploads],
+    [
+      activeCount,
+      cancelUpload,
+      clearQueue,
+      completedCount,
+      enqueueUploads,
+      maxConcurrentUploads,
+      queuedCount,
+      setMaxConcurrentUploads,
+      settledUploadsVersion,
+      sortedUploads,
+    ],
   )
 
   return (
