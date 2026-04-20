@@ -269,11 +269,6 @@ function buildMarkerPopupContent(markerData: {
   return wrapper
 }
 
-function getCircularHourDistance(hourA: number, hourB: number) {
-  const absoluteDistance = Math.abs(hourA - hourB)
-  return Math.min(absoluteDistance, 24 - absoluteDistance)
-}
-
 function getWorstHourlyLos(location: PTSILocation) {
   const hourlyLosValues = location.hourlyScores
     .map((hourlyScore) => resolveLosGrade(hourlyScore.los, hourlyScore.score, hourlyScore.losDescription))
@@ -305,27 +300,7 @@ function getHourlyLosForFocusTime(location: PTSILocation, focusTime: string) {
   if (exactMatch) {
     return { los: exactMatch.los, method: "focusTime exact" as const }
   }
-
-  const nearestMatch = hourlyEntries.reduce<{ hour: number; los: string } | null>((closest, entry) => {
-    if (!closest) {
-      return entry
-    }
-
-    const entryDistance = getCircularHourDistance(entry.hour, focusHour)
-    const closestDistance = getCircularHourDistance(closest.hour, focusHour)
-
-    if (entryDistance < closestDistance) {
-      return entry
-    }
-
-    if (entryDistance === closestDistance && LOS_RANKS[entry.los] > LOS_RANKS[closest.los]) {
-      return entry
-    }
-
-    return closest
-  }, null)
-
-  return nearestMatch ? { los: nearestMatch.los, method: "focusTime nearest" as const } : null
+  return null
 }
 
 function isMinuteWithinWindow(hourMinute: number, windowStartMinute: number, durationMinutes: number) {
@@ -375,12 +350,16 @@ function getAverageHourlyLosForWindow(location: PTSILocation, timeRange?: string
 
 type LosResolution = {
   los: string | null
-  losSource: "focusTime exact" | "focusTime nearest" | "window average" | "location LOS/score" | "worst hourly" | "unresolved"
+  losSource: "focusTime exact" | "window average" | "location LOS/score" | "worst hourly" | "unresolved"
   unresolvedReason?: string
 }
 
 function resolveLosFromLocation(location: PTSILocation, options: { focusTime?: string; timeRange?: string; startTime?: string }) {
   const { focusTime, timeRange, startTime } = options
+  const hasWindowContext = Boolean(
+    focusTime
+    || (durationFromTimeRange(timeRange) !== null && parseClockMinutes(startTime) !== null),
+  )
 
   if (focusTime) {
     const focusedHourlyLos = getHourlyLosForFocusTime(location, focusTime)
@@ -397,6 +376,14 @@ function resolveLosFromLocation(location: PTSILocation, options: { focusTime?: s
     return {
       los: averagedWindowLos,
       losSource: "window average",
+    } satisfies LosResolution
+  }
+
+  if (hasWindowContext) {
+    return {
+      los: null,
+      losSource: "unresolved",
+      unresolvedReason: "no LOS available inside selected time context",
     } satisfies LosResolution
   }
 
