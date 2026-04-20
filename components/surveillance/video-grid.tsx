@@ -6,11 +6,10 @@ import { Plus } from "lucide-react"
 
 interface VideoGridProps {
   locations: LocationRecord[]
-  detectionMode: boolean
   onAddVideoClick?: (locationId?: string) => void
 }
 
-export function VideoGrid({ locations, detectionMode, onAddVideoClick }: VideoGridProps) {
+export function VideoGrid({ locations, onAddVideoClick }: VideoGridProps) {
   return (
     <div className="space-y-8">
       {locations.map((location) => {
@@ -34,11 +33,10 @@ export function VideoGrid({ locations, detectionMode, onAddVideoClick }: VideoGr
                   location={location.name}
                   timestamp={video.timestamp}
                   date={video.date}
-                  detectionMode={detectionMode}
                   pedestrianCount={video.pedestrianCount}
                   rawPath={video.rawPath}
                   processedPath={video.processedPath}
-                  mediaUrl={getMediaUrl(getVideoPlaybackPath(video, detectionMode))}
+                  mediaUrl={getMediaUrl(getVideoPlaybackPath(video))}
                 />
               ))}
 

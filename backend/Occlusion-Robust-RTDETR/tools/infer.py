@@ -1011,10 +1011,11 @@ def process_video(args):
                         if out is not None:
                             out.write(output_frame)
                         
-                        cv2.imshow('RT-DETR Video Inference - Press Q to quit', output_frame)
-                        if cv2.waitKey(1) & 0xFF == ord('q'):
-                            print("\nStopping inference (user pressed 'q')")
-                            break
+                        if args.display:
+                            cv2.imshow('RT-DETR Video Inference - Press Q to quit', output_frame)
+                            if cv2.waitKey(1) & 0xFF == ord('q'):
+                                print("\nStopping inference (user pressed 'q')")
+                                break
                         
                         pbar.update(1)
                 
@@ -1216,15 +1217,16 @@ def process_video(args):
                         if out is not None:
                             out.write(output_frame)
                         
-                        cv2.imshow('RT-DETR Video Inference - Press Q to quit', output_frame)
-                        if cv2.waitKey(1) & 0xFF == ord('q'):
-                            print("\nStopping inference (user pressed 'q')")
-                            cap.release()
-                            if out is not None:
-                                out.release()
-                            pbar.close()
-                            cv2.destroyAllWindows()
-                            return
+                        if args.display:
+                            cv2.imshow('RT-DETR Video Inference - Press Q to quit', output_frame)
+                            if cv2.waitKey(1) & 0xFF == ord('q'):
+                                print("\nStopping inference (user pressed 'q')")
+                                cap.release()
+                                if out is not None:
+                                    out.release()
+                                pbar.close()
+                                cv2.destroyAllWindows()
+                                return
                         
                         pbar.update(1)
                     
@@ -1463,11 +1465,12 @@ def process_video(args):
             if out is not None:
                 out.write(output_frame)
 
-            # Display frame in real-time (always enabled now)
-            cv2.imshow('RT-DETR Video Inference - Press Q to quit', output_frame)
-            if cv2.waitKey(1) & 0xFF == ord('q'):
-                print("\\nStopping inference (user pressed 'q')")
-                break
+            # Display frame in real-time only when explicitly enabled.
+            if args.display:
+                cv2.imshow('RT-DETR Video Inference - Press Q to quit', output_frame)
+                if cv2.waitKey(1) & 0xFF == ord('q'):
+                    print("\\nStopping inference (user pressed 'q')")
+                    break
             
             frame_count += 1
             pbar.update(1)
@@ -1575,7 +1578,8 @@ def process_video(args):
                 print("\nNo vehicles in the last time interval")
             print("\n====================================================\n")
 
-    cv2.destroyAllWindows()
+    if args.display:
+        cv2.destroyAllWindows()
     print(f"Processed {frame_count} frames")
 
 def main(args, ):

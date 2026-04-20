@@ -8,16 +8,15 @@ interface VideoThumbnailProps {
   location: string
   timestamp: string
   date: string
-  detectionMode: boolean
   pedestrianCount: number
   mediaUrl?: string | null
   rawPath?: string | null
   processedPath?: string | null
 }
 
-export function VideoThumbnail({ id, location, timestamp, date, detectionMode, pedestrianCount, mediaUrl, rawPath, processedPath }: VideoThumbnailProps) {
+export function VideoThumbnail({ id, location, timestamp, date, pedestrianCount, mediaUrl, rawPath, processedPath }: VideoThumbnailProps) {
   const statusLabel = processedPath ? "Annotated" : rawPath ? "Uploaded" : "Sample"
-  const previewLabel = detectionMode && processedPath ? "Processed view" : rawPath ? "Raw view" : "Preview unavailable"
+  const previewLabel = processedPath ? "Processed view" : rawPath ? "Raw view" : "Preview unavailable"
 
   return (
     <Link
@@ -44,7 +43,7 @@ export function VideoThumbnail({ id, location, timestamp, date, detectionMode, p
           <Wifi className="w-3 h-3 text-accent" />
           <span className="text-[10px] text-white font-medium">{statusLabel}</span>
         </div>
-        {detectionMode && processedPath && (
+        {processedPath && (
           <div className="flex items-center gap-1.5 rounded-full bg-primary/80 px-2 py-1 text-[10px] font-medium text-primary-foreground">
             <ScanLine className="h-3 w-3" />
             Tracking View

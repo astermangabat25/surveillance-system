@@ -1452,7 +1452,7 @@ def _location_payload(location: dict[str, Any]) -> dict[str, Any]:
 
 def seed_state() -> dict[str, Any]:
     return {
-        "model": {"currentModel": "yolov8n-bytetrack.pt", "uploadedAt": None},
+        "model": {"currentModel": "yolov8n-bytetrack.pt", "uploadedAt": None, "inferConfig": None},
         "locations": [
             {
                 "id": "gate-2",
@@ -1559,6 +1559,11 @@ def load_state() -> dict[str, Any]:
         if location.get("id") == "gate-2-9" and not location.get("roiCoordinates"):
             location["roiCoordinates"] = deepcopy(DEFAULT_EDSA_SEC_WALK_ROI)
             changed = True
+
+    model_state = state.get("model")
+    if isinstance(model_state, dict) and "inferConfig" not in model_state:
+        model_state["inferConfig"] = None
+        changed = True
 
     for track in state.get("pedestrianTracks", []):
         if not isinstance(track.get("trajectorySamples"), list):
@@ -1861,6 +1866,7 @@ def set_video_inference_result(
     processed_path: Optional[str],
     events: list[dict[str, Any]],
     pedestrian_tracks: Optional[list[dict[str, Any]]] = None,
+    end_time: Optional[str] = None,
 ) -> dict[str, Any]:
     state = load_state()
     video = next((item for item in state["videos"] if item["id"] == video_id), None)
@@ -1869,6 +1875,8 @@ def set_video_inference_result(
 
     video["pedestrianCount"] = pedestrian_count
     video["processedPath"] = processed_path
+    if isinstance(end_time, str) and end_time.strip():
+        video["endTime"] = end_time.strip()
     state["events"] = [event for event in state["events"] if event.get("videoId") != video_id]
     state["events"].extend(events)
     state["pedestrianTracks"] = [track for track in state.get("pedestrianTracks", []) if track.get("videoId") != video_id]
@@ -1922,9 +1930,15 @@ def get_model_info() -> dict[str, Any]:
     return deepcopy(load_state()["model"])
 
 
-def set_model(filename: str) -> dict[str, Any]:
+def set_model(filename: str, infer_config: Optional[str] = None) -> dict[str, Any]:
     state = load_state()
-    state["model"] = {"currentModel": filename, "uploadedAt": datetime.utcnow().isoformat(timespec="seconds") + "Z"}
+    previous_model = state.get("model", {})
+    next_infer_config = infer_config if infer_config is not None else previous_model.get("inferConfig")
+    state["model"] = {
+        "currentModel": filename,
+        "uploadedAt": datetime.utcnow().isoformat(timespec="seconds") + "Z",
+        "inferConfig": next_infer_config,
+    }
     save_state(state)
     return deepcopy(state["model"])
 

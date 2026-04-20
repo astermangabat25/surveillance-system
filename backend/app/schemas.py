@@ -238,6 +238,7 @@ class SearchResult(BaseModel):
 class ModelInfo(BaseModel):
     currentModel: Optional[str] = None
     uploadedAt: Optional[str] = None
+    inferConfig: Optional[str] = None
 
 
 class InferenceStatus(BaseModel):
@@ -246,6 +247,8 @@ class InferenceStatus(BaseModel):
     preferredTag: str
     fallbackTag: str
     currentModel: Optional[str] = None
+    currentInferConfig: Optional[str] = None
+    inferConfigPath: Optional[str] = None
     modelPath: Optional[str] = None
     modelExists: bool
     ready: bool
@@ -263,6 +266,11 @@ class InferenceRequirementUploadResult(BaseModel):
 
 
 class CountingConfigList(BaseModel):
+    options: list[str] = Field(default_factory=list)
+    defaultConfig: Optional[str] = None
+
+
+class InferConfigList(BaseModel):
     options: list[str] = Field(default_factory=list)
     defaultConfig: Optional[str] = None
 

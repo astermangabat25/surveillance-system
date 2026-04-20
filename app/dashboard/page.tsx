@@ -27,6 +27,7 @@ import {
 import { AlertCircle, Clock, Download, FileCode, Loader2, RefreshCw, Settings2, Upload } from "lucide-react"
 import {
   downloadDashboardReport,
+  getInferConfigChoices,
   getAISynthesis,
   getCurrentModel,
   getDashboardLOS,
@@ -41,6 +42,7 @@ import {
   uploadModel,
   type AISynthesisResponse,
   type DashboardSummary,
+  type InferConfigList,
   type LocationRecord,
   type InferenceStatus,
   type InferenceRequirementType,
@@ -88,6 +90,8 @@ export default function DashboardPage() {
   const [inOutChartType, setInOutChartType] = useState<"line" | "bar">("line")
   const [modelDialogOpen, setModelDialogOpen] = useState(false)
   const [modelFile, setModelFile] = useState<File | null>(null)
+  const [selectedInferConfig, setSelectedInferConfig] = useState("")
+  const [inferConfigChoices, setInferConfigChoices] = useState<InferConfigList>({ options: [], defaultConfig: null })
   const [requirementFile, setRequirementFile] = useState<File | null>(null)
   const [requirementType, setRequirementType] = useState<InferenceRequirementType>("infer-config")
   const [summary, setSummary] = useState<DashboardSummary | null>(null)
@@ -158,9 +162,19 @@ export default function DashboardPage() {
   const loadModelInfo = useCallback(async () => {
     setModelLoading(true)
     try {
-      const [modelResponse, inferenceResponse] = await Promise.all([getCurrentModel(), getInferenceStatus()])
+      const [modelResponse, inferenceResponse, inferConfigResponse] = await Promise.all([
+        getCurrentModel(),
+        getInferenceStatus(),
+        getInferConfigChoices(),
+      ])
       setModelInfo(modelResponse)
       setInferenceStatus(inferenceResponse)
+      setInferConfigChoices(inferConfigResponse)
+      const configFromModel = modelResponse.inferConfig ?? ""
+      const nextSelectedConfig =
+        (configFromModel && inferConfigResponse.options.includes(configFromModel) ? configFromModel : "") ||
+        (inferConfigResponse.defaultConfig ?? "")
+      setSelectedInferConfig(nextSelectedConfig)
       setModelError(null)
     } catch (error) {
       setModelError(error instanceof Error ? error.message : "Failed to load model information.")
@@ -213,13 +227,13 @@ export default function DashboardPage() {
   }, [hourFilter, occlusion])
 
   const handleModelUpload = async () => {
-    if (!modelFile) {
+    if (!modelFile || !selectedInferConfig) {
       return
     }
 
     setModelUploading(true)
     try {
-      await uploadModel(modelFile)
+      await uploadModel(modelFile, selectedInferConfig)
       await loadModelInfo()
       setModelError(null)
       setModelDialogOpen(false)
@@ -275,6 +289,7 @@ export default function DashboardPage() {
   }
 
   const currentModelLabel = modelInfo?.currentModel ?? "No model uploaded yet"
+  const currentInferConfigLabel = modelInfo?.inferConfig ?? inferConfigChoices.defaultConfig ?? "Not selected"
   const currentModelTimestamp = modelInfo?.uploadedAt ? new Date(modelInfo.uploadedAt).toLocaleString("en-US") : null
   const inferenceReady = Boolean(inferenceStatus?.ready)
   const missingRequiredPath = inferenceStatus?.missingFixedPath
@@ -406,6 +421,7 @@ export default function DashboardPage() {
                     <div>
                       <p className="text-sm font-medium text-foreground">Current Model</p>
                       <p className="text-xs text-muted-foreground">{modelLoading ? "Loading model..." : currentModelLabel}</p>
+                      <p className="mt-1 text-[11px] text-muted-foreground">Config: {currentInferConfigLabel}</p>
                       {currentModelTimestamp && (
                         <p className="mt-1 text-[11px] text-muted-foreground">Uploaded {currentModelTimestamp}</p>
                       )}
@@ -430,10 +446,9 @@ export default function DashboardPage() {
 
                   <div className="mt-3 rounded-xl border border-border/70 bg-background/60 p-3 text-[11px] text-muted-foreground">
                     <p className="font-medium text-foreground">Required files checklist</p>
-                    <p className="mt-1">1. tools/infer.py in the RT-DETR repo</p>
-                    <p>2. Config in backend/Occlusion-Robust-RTDETR/configs/rtdetr/</p>
-                    <p>3. Counting config in backend/Occlusion-Robust-RTDETR/inference_requirements/counting/</p>
-                    <p>4. Active model weights (.pt or .pth)</p>
+                    <p className="mt-1">1. Config in backend/Occlusion-Robust-RTDETR/configs/rtdetr/</p>
+                    <p>2. Counting config in backend/Occlusion-Robust-RTDETR/inference_requirements/counting/</p>
+                    <p>3. Active model weights (.pt or .pth)</p>
                   </div>
 
                   {missingRequiredPath && (
@@ -452,7 +467,6 @@ export default function DashboardPage() {
                       <SelectContent className="rounded-xl border-border bg-popover">
                         <SelectItem value="infer-config" className="rounded-lg text-foreground">Infer Config (.yml/.yaml)</SelectItem>
                         <SelectItem value="annotations" className="rounded-lg text-foreground">Annotations (.json)</SelectItem>
-                        <SelectItem value="counting-config" className="rounded-lg text-foreground">Counting Config (.json)</SelectItem>
                       </SelectContent>
                     </Select>
 
@@ -485,6 +499,23 @@ export default function DashboardPage() {
 
                 <div className="space-y-2">
                   <label className="text-sm font-medium text-foreground">Upload New Model</label>
+
+                  <div className="space-y-2">
+                    <label className="text-xs font-medium text-muted-foreground">Inference Config (.yml)</label>
+                    <Select value={selectedInferConfig} onValueChange={setSelectedInferConfig}>
+                      <SelectTrigger className="h-9 rounded-xl border-border bg-background text-xs text-foreground">
+                        <SelectValue placeholder="Select infer config" />
+                      </SelectTrigger>
+                      <SelectContent className="rounded-xl border-border bg-popover">
+                        {inferConfigChoices.options.map((configName) => (
+                          <SelectItem key={configName} value={configName} className="rounded-lg text-foreground">
+                            {configName}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+
                   <div
                     className={`rounded-2xl border-2 border-dashed p-6 text-center transition-colors ${
                       modelFile ? "border-accent bg-accent/10" : "border-border hover:border-muted-foreground"
@@ -513,7 +544,7 @@ export default function DashboardPage() {
 
                 <Button
                   onClick={handleModelUpload}
-                  disabled={!modelFile || modelUploading}
+                  disabled={!modelFile || !selectedInferConfig || modelUploading}
                   className="w-full rounded-2xl bg-primary text-primary-foreground hover:bg-primary/90"
                 >
                   {modelUploading ? (

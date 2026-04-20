@@ -244,6 +244,7 @@ export interface SearchResult {
 export interface ModelInfo {
   currentModel?: string | null
   uploadedAt?: string | null
+  inferConfig?: string | null
 }
 
 export interface InferenceStatus {
@@ -252,6 +253,8 @@ export interface InferenceStatus {
   preferredTag: string
   fallbackTag: string
   currentModel?: string | null
+  currentInferConfig?: string | null
+  inferConfigPath?: string | null
   modelPath?: string | null
   modelExists: boolean
   ready: boolean
@@ -275,6 +278,11 @@ export interface CountingConfigList {
   defaultConfig?: string | null
 }
 
+export interface InferConfigList {
+  options: string[]
+  defaultConfig?: string | null
+}
+
 export interface DownloadedReport {
   blob: Blob
   filename: string
@@ -294,7 +302,6 @@ export interface VideoUploadStatus {
   date?: string | null
   startTime?: string | null
   endTime?: string | null
-  fastMode?: boolean | null
   createdAt?: string | null
   startedAt?: string | null
   completedAt?: string | null
@@ -455,7 +462,7 @@ export function uploadVideo(payload: {
   manualDurationHours?: number
   manualDurationMinutes?: number
   countingConfig?: string
-  fastMode?: boolean
+  showLivePreview?: boolean
   onProgress?: (status: VideoUploadStatus) => void
 }) {
   const formData = new FormData()
@@ -476,14 +483,14 @@ export function uploadVideo(payload: {
   if (payload.countingConfig) {
     formData.set("countingConfig", payload.countingConfig)
   }
-  formData.set("fastMode", String(Boolean(payload.fastMode)))
+  formData.set("showLivePreview", String(Boolean(payload.showLivePreview)))
   formData.set("uploadId", uploadId)
 
   payload.onProgress?.({
     uploadId,
     state: "queued",
     progressPercent: 0,
-    message: payload.fastMode ? "Uploading video in fast mode..." : "Uploading video...",
+    message: "Uploading video...",
     phase: "queued",
     updatedAt: new Date().toISOString(),
   })
@@ -654,14 +661,21 @@ export function getCountingConfigChoices() {
   return request<CountingConfigList>("/api/inference/requirements/counting-configs")
 }
 
-export function uploadModel(file: File) {
+export function uploadModel(file: File, inferConfig?: string) {
   const formData = new FormData()
   formData.set("file", file)
+  if (inferConfig) {
+    formData.set("inferConfig", inferConfig)
+  }
 
   return request<ModelInfo>("/api/models/upload", {
     method: "POST",
     body: formData,
   })
+}
+
+export function getInferConfigChoices() {
+  return request<InferConfigList>("/api/inference/requirements/infer-configs")
 }
 
 export function uploadInferenceRequirement(payload: { file: File; requirementType: InferenceRequirementType }) {

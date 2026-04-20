@@ -365,7 +365,7 @@ async def upload_video(
     manualDurationHours: Optional[int] = Form(None),
     manualDurationMinutes: Optional[int] = Form(None),
     countingConfig: Optional[str] = Form(None),
-    fastMode: bool = Form(False),
+    showLivePreview: bool = Form(False),
     uploadId: Optional[str] = Form(None),
 ) -> dict:
     status = inference.ultralytics_status()
@@ -402,16 +402,8 @@ async def upload_video(
     if computed_end_time is None and fallback_duration_seconds:
         computed_end_time = _compute_end_time(startTime, fallback_duration_seconds)
 
-    resolved_end_time = computed_end_time or (str(endTime or "").strip() or None)
-    if not resolved_end_time:
-        raw_target.unlink(missing_ok=True)
-        detail = (
-            "Unable to determine video duration automatically. "
-            "Provide manual duration (hours/minutes) or a valid endTime."
-        )
-        if uploadId:
-            store.set_upload_status(uploadId, state="error", progress_percent=None, message="Video duration is required.", error=detail)
-        raise HTTPException(status_code=400, detail=detail)
+    # Keep upload non-blocking even if metadata probing fails; this is overwritten after processing.
+    resolved_end_time = computed_end_time or (str(endTime or "").strip() or startTime)
 
     if uploadId:
         store.set_upload_status(
@@ -425,7 +417,6 @@ async def upload_video(
             date=date,
             start_time=startTime,
             end_time=resolved_end_time,
-            fast_mode=fastMode,
         )
 
     try:
@@ -445,7 +436,11 @@ async def upload_video(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     try:
-        video_for_inference = {**video, "countingConfig": selected_counting_config}
+        video_for_inference = {
+            **video,
+            "countingConfig": selected_counting_config,
+            "showLivePreview": showLivePreview,
+        }
 
         def ensure_not_cancelled() -> None:
             if uploadId and store.is_upload_cancel_requested(uploadId):
@@ -484,7 +479,6 @@ async def upload_video(
             video_path=raw_target,
             model_name=None,
             video_record=video_for_inference,
-            fast_mode=fastMode,
             progress_callback=handle_processing_progress,
         )
         ensure_not_cancelled()
@@ -497,15 +491,41 @@ async def upload_video(
                 phase="ptsi",
                 video_id=video["id"],
             )
+
+        duration_probe_paths: list[Path] = []
+        processed_path_value = result.get("processedPath")
+        if isinstance(processed_path_value, str) and processed_path_value.strip():
+            duration_probe_paths.append(store.BACKEND_DIR / processed_path_value)
+        duration_probe_paths.append(raw_target)
+
+        final_duration_seconds: Optional[int] = None
+        for candidate_path in duration_probe_paths:
+            if not candidate_path.exists():
+                continue
+            candidate_duration = inference.detect_video_duration_seconds(candidate_path)
+            if candidate_duration and candidate_duration > 0:
+                final_duration_seconds = candidate_duration
+                break
+
+        final_end_time = _compute_end_time(startTime, final_duration_seconds) if final_duration_seconds else resolved_end_time
+
         response = store.set_video_inference_result(
             video_id=video["id"],
             pedestrian_count=result.get("pedestrianCount", 0),
             processed_path=result.get("processedPath"),
             events=result.get("events", []),
             pedestrian_tracks=result.get("pedestrianTracks", []),
+            end_time=final_end_time,
         )
         if uploadId:
-            store.set_upload_status(uploadId, state="complete", progress_percent=100, message="Video upload and processing complete.", video_id=video["id"])
+            store.set_upload_status(
+                uploadId,
+                state="complete",
+                progress_percent=100,
+                message="Video upload and processing complete.",
+                video_id=video["id"],
+                end_time=final_end_time,
+            )
         return response
     except InterruptedError as exc:
         store.remove_video(video["id"])
@@ -635,6 +655,18 @@ def list_counting_configs() -> dict[str, object]:
     }
 
 
+@app.get("/api/inference/requirements/infer-configs", response_model=schemas.InferConfigList)
+def list_infer_configs() -> dict[str, object]:
+    options = inference.list_infer_config_names()
+    model_info = store.get_model_info()
+    selected_name = str(model_info.get("inferConfig") or "").strip() or None
+    default_config = selected_name if selected_name in options else (options[0] if options else None)
+    return {
+        "options": options,
+        "defaultConfig": default_config,
+    }
+
+
 @app.post("/api/inference/requirements/upload", response_model=schemas.InferenceRequirementUploadResult, status_code=201)
 async def upload_inference_requirement(
     file: UploadFile = File(...),
@@ -677,11 +709,25 @@ async def upload_inference_requirement(
 
 
 @app.post("/api/models/upload", response_model=schemas.ModelInfo, status_code=201)
-async def upload_model(file: UploadFile = File(...)) -> dict:
+async def upload_model(
+    file: UploadFile = File(...),
+    inferConfig: Optional[str] = Form(None),
+) -> dict:
     filename = safe_filename(file.filename or "model.pt")
     suffix = Path(filename).suffix.lower()
     if suffix not in {".pt", ".pth"}:
         raise HTTPException(status_code=400, detail="Only .pt or .pth model files are supported")
+
+    selected_infer_config = str(inferConfig or "").strip() or None
+    if selected_infer_config:
+        available_configs = set(inference.list_infer_config_names())
+        normalized_name = Path(selected_infer_config).name
+        if Path(normalized_name).suffix.lower() not in {".yml", ".yaml"}:
+            normalized_name = f"{normalized_name}.yml"
+        if normalized_name not in available_configs:
+            raise HTTPException(status_code=400, detail=f"Unknown infer config: {normalized_name}")
+        selected_infer_config = normalized_name
+
     target = store.MODELS_DIR / filename
     target.write_bytes(await file.read())
-    return store.set_model(filename)
+    return store.set_model(filename, infer_config=selected_infer_config)

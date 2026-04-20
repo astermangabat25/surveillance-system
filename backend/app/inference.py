@@ -98,7 +98,6 @@ def _candidate_occlusion_repo_dirs() -> list[Path]:
 def _looks_like_occlusion_repo(candidate: Path) -> bool:
     infer_candidates = [
         candidate / "src" / "zoo" / "rtdetr" / "infer.py",
-        candidate / "tools" / "infer.py",
     ]
     return any(path.exists() for path in infer_candidates)
 
@@ -151,6 +150,16 @@ def requirements_config_dir() -> Path:
     return CANONICAL_INFERENCE_CONFIGS_DIR
 
 
+def list_infer_config_names() -> list[str]:
+    config_dir = requirements_config_dir()
+    config_dir.mkdir(parents=True, exist_ok=True)
+    return sorted(
+        path.name
+        for path in config_dir.glob("*")
+        if path.is_file() and path.suffix.lower() in {".yml", ".yaml"}
+    )
+
+
 def requirements_annotations_dir() -> Path:
     _ensure_inference_requirements_layout()
     return INFERENCE_ANNOTATIONS_DIR
@@ -177,8 +186,8 @@ def _infer_script_path() -> Path:
 
     repo_dir = _occlusion_repo_dir()
     preferred_candidates = [
-        repo_dir / "src" / "zoo" / "rtdetr" / "infer.py",
         repo_dir / "tools" / "infer.py",
+        repo_dir / "src" / "zoo" / "rtdetr" / "infer.py",
     ]
 
     for candidate in preferred_candidates:
@@ -188,7 +197,19 @@ def _infer_script_path() -> Path:
     return preferred_candidates[0]
 
 
-def _infer_config_path() -> Path:
+def _infer_config_path(selected_config_name: Optional[str] = None) -> Path:
+    selected_value = str(selected_config_name or "").strip()
+    if not selected_value:
+        model_info = store.get_model_info()
+        selected_value = str(model_info.get("inferConfig") or "").strip()
+
+    if selected_value:
+        normalized_name = Path(selected_value).name
+        if Path(normalized_name).suffix.lower() not in {".yml", ".yaml"}:
+            normalized_name = f"{normalized_name}.yml"
+        selected_candidate = requirements_config_dir() / normalized_name
+        return selected_candidate
+
     configured_path = str(os.getenv("RTDETR_INFER_CONFIG") or "").strip()
     if configured_path:
         configured_candidate = Path(configured_path).expanduser()
@@ -445,13 +466,14 @@ def ultralytics_status() -> dict[str, Any]:
     _ensure_inference_requirements_layout()
     model_info = store.get_model_info()
     model_name = model_info.get("currentModel")
+    infer_config_name = str(model_info.get("inferConfig") or "").strip() or None
     model_path = resolve_model_path(model_name)
     repo_dir = _occlusion_repo_dir()
+    infer_config_path = _infer_config_path(infer_config_name)
     infer_script = _infer_script_path()
     fixed_required_paths = [
         repo_dir,
-        infer_script,
-        _infer_config_path(),
+        infer_config_path,
         _infer_counting_config_path(),
         _required_annotations_path(),
     ]
@@ -474,6 +496,8 @@ def ultralytics_status() -> dict[str, Any]:
         "preferredTag": PREFERRED_ULTRALYTICS_TAG,
         "fallbackTag": FALLBACK_ULTRALYTICS_TAG,
         "currentModel": model_name,
+        "currentInferConfig": infer_config_name,
+        "inferConfigPath": _project_relative_path(infer_config_path),
         "modelPath": _project_relative_path(model_path),
         "modelExists": model_path is not None,
         "ready": pipeline_installed and model_path is not None,
@@ -571,14 +595,16 @@ def _build_rtdetr_command(
     model_path: Path,
     video_path: Path,
     output_path: Path,
+    infer_config_path: Path,
     counting_config_path: Path,
     annotations_path: Path,
+    enable_display: bool = False,
 ) -> list[str]:
     command = [
         str(_inference_python_executable()),
         str(_infer_script_path().resolve()),
         "--config",
-        str(_infer_config_path().resolve()),
+        str(infer_config_path.resolve()),
         "-r",
         str(model_path.resolve()),
         "-v",
@@ -601,6 +627,9 @@ def _build_rtdetr_command(
         str(annotations_path.resolve()),
     ]
 
+    if enable_display:
+        command.append("--display")
+
     return command
 
 
@@ -608,8 +637,16 @@ def _wait_for_process_with_cancellation(
     process: subprocess.Popen[str],
     *,
     progress_callback: Optional[Callable[[dict[str, Any]], None]],
+    timeout_seconds: Optional[float] = None,
+    model_name: Optional[str] = None,
+    infer_config_name: Optional[str] = None,
 ) -> tuple[int, str, str]:
     started_at = time.monotonic()
+    effective_timeout_seconds = (
+        max(1.0, float(timeout_seconds))
+        if timeout_seconds is not None
+        else INFERENCE_MAX_RUNTIME_SECONDS
+    )
     while True:
         _run_cancel_check(progress_callback)
         try:
@@ -617,13 +654,27 @@ def _wait_for_process_with_cancellation(
             return process.returncode or 0, stdout or "", stderr or ""
         except subprocess.TimeoutExpired:
             elapsed_seconds = time.monotonic() - started_at
-            if elapsed_seconds > INFERENCE_MAX_RUNTIME_SECONDS:
+            if elapsed_seconds > effective_timeout_seconds:
                 _terminate_process(process)
+                model_label = model_name or "unknown-model"
+                config_label = infer_config_name or "unknown-config"
                 raise RuntimeError(
                     "RT-DETR inference command timed out "
-                    f"after {INFERENCE_MAX_RUNTIME_SECONDS:.1f} seconds."
+                    f"after {effective_timeout_seconds:.1f} seconds "
+                    f"(model={model_label}, config={config_label})."
                 )
             continue
+
+
+def _runtime_timeout_seconds(video_path: Path) -> float:
+    detected_duration_seconds = detect_video_duration_seconds(video_path)
+    if detected_duration_seconds is None:
+        return INFERENCE_MAX_RUNTIME_SECONDS
+
+    # Allow slower backbones enough runtime while still preventing indefinite hangs.
+    multiplier = 12.0
+    base_timeout = max(180.0, (float(detected_duration_seconds) * multiplier) + 120.0)
+    return min(INFERENCE_MAX_RUNTIME_SECONDS, base_timeout)
 
 
 def _terminate_process(process: subprocess.Popen[str]) -> None:
@@ -1313,7 +1364,6 @@ def run_video_inference(
     video_path: Path,
     model_name: Optional[str] = None,
     video_record: Optional[dict[str, Any]] = None,
-    fast_mode: bool = False,
     progress_callback: Optional[Callable[[dict[str, Any]], None]] = None,
 ) -> dict[str, Any]:
     status = ultralytics_status()
@@ -1338,10 +1388,12 @@ def run_video_inference(
     save_dir.mkdir(parents=True, exist_ok=True)
     output_video_path = save_dir / f"{video_path.stem}-processed.mp4"
     selected_counting_config_name = str((video_record or {}).get("countingConfig") or "").strip() or None
+    show_live_preview = bool((video_record or {}).get("showLivePreview"))
     counting_config_path = resolve_counting_config_path(
         selected_config_name=selected_counting_config_name,
         location_name=(video_record or {}).get("location"),
     )
+    infer_config_path = _infer_config_path()
     annotations_path = _required_annotations_path()
     if not annotations_path.exists() or not annotations_path.is_file():
         raise RuntimeError(
@@ -1352,8 +1404,10 @@ def run_video_inference(
         model_path=model_path,
         video_path=video_path,
         output_path=output_video_path,
+        infer_config_path=infer_config_path,
         counting_config_path=counting_config_path,
         annotations_path=annotations_path,
+        enable_display=show_live_preview,
     )
 
     _run_cancel_check(progress_callback)
@@ -1368,6 +1422,7 @@ def run_video_inference(
 
     process: Optional[subprocess.Popen[str]] = None
     try:
+        timeout_seconds = _runtime_timeout_seconds(video_path)
         process = subprocess.Popen(
             command,
             cwd=str(_occlusion_repo_dir().resolve()),
@@ -1377,7 +1432,13 @@ def run_video_inference(
             start_new_session=True,
         )
 
-        return_code, _stdout, stderr = _wait_for_process_with_cancellation(process, progress_callback=progress_callback)
+        return_code, _stdout, stderr = _wait_for_process_with_cancellation(
+            process,
+            progress_callback=progress_callback,
+            timeout_seconds=timeout_seconds,
+            model_name=model_path.name,
+            infer_config_name=infer_config_path.name,
+        )
 
         if progress_callback is not None:
             progress_callback(

@@ -27,7 +27,7 @@ export interface EnqueuedUploadInput {
   manualDurationHours?: number
   manualDurationMinutes?: number
   countingConfig?: string
-  fastMode: boolean
+  showLivePreview?: boolean
 }
 
 export interface UploadQueueItem {
@@ -43,7 +43,7 @@ export interface UploadQueueItem {
   manualDurationHours: number | null
   manualDurationMinutes: number | null
   countingConfig: string | null
-  fastMode: boolean
+  showLivePreview: boolean
   uploadId: string | null
   state: UploadState
   progressPercent: number | null
@@ -153,11 +153,11 @@ function createQueuedItem(input: EnqueuedUploadInput): UploadQueueItem {
     manualDurationHours: typeof input.manualDurationHours === "number" ? input.manualDurationHours : null,
     manualDurationMinutes: typeof input.manualDurationMinutes === "number" ? input.manualDurationMinutes : null,
     countingConfig: input.countingConfig ?? null,
-    fastMode: input.fastMode,
+    showLivePreview: Boolean(input.showLivePreview),
     uploadId: null,
     state: "queued",
     progressPercent: 0,
-    message: input.fastMode ? "Waiting to upload in fast mode..." : "Waiting to upload...",
+    message: "Waiting to upload...",
     phase: "queued",
     videoId: null,
     error: null,
@@ -190,7 +190,7 @@ function createUploadFromHistory(status: VideoUploadStatus): UploadQueueItem {
     manualDurationHours: null,
     manualDurationMinutes: null,
     countingConfig: null,
-    fastMode: Boolean(status.fastMode),
+    showLivePreview: false,
     uploadId: status.uploadId,
     state: status.state,
     progressPercent: typeof status.progressPercent === "number" ? status.progressPercent : null,
@@ -235,7 +235,6 @@ function mergeUploadsWithHistory(currentUploads: UploadQueueItem[], history: Vid
       date: upload.date || historyStatus.date || upload.date,
       startTime: upload.startTime || historyStatus.startTime || upload.startTime,
       endTime: upload.endTime || historyStatus.endTime || upload.endTime,
-      fastMode: upload.fastMode || Boolean(historyStatus.fastMode),
       createdAt: upload.createdAt || historyStatus.createdAt || upload.updatedAt,
       startedAt: upload.startedAt ?? historyStatus.startedAt ?? (historyStatus.state === "queued" ? null : historyStatus.updatedAt),
       completedAt: isTerminalState(historyStatus.state)
@@ -296,7 +295,7 @@ function restoreUpload(value: unknown): UploadQueueItem | null {
     manualDurationHours: typeof upload.manualDurationHours === "number" ? upload.manualDurationHours : null,
     manualDurationMinutes: typeof upload.manualDurationMinutes === "number" ? upload.manualDurationMinutes : null,
     countingConfig: typeof upload.countingConfig === "string" ? upload.countingConfig : null,
-    fastMode: Boolean(upload.fastMode),
+    showLivePreview: Boolean(upload.showLivePreview),
     uploadId: typeof upload.uploadId === "string" ? upload.uploadId : null,
     state: upload.state,
     progressPercent: typeof upload.progressPercent === "number" ? upload.progressPercent : null,
@@ -580,7 +579,7 @@ export function UploadQueueProvider({ children }: { children: ReactNode }) {
         ...current,
         startedAt: current.startedAt ?? startedAt,
         updatedAt: startedAt,
-        message: current.fastMode ? "Preparing fast upload..." : "Preparing upload...",
+        message: "Preparing upload...",
       }))
 
       try {
@@ -593,7 +592,7 @@ export function UploadQueueProvider({ children }: { children: ReactNode }) {
           manualDurationHours: queuedUpload.manualDurationHours ?? undefined,
           manualDurationMinutes: queuedUpload.manualDurationMinutes ?? undefined,
           countingConfig: queuedUpload.countingConfig ?? undefined,
-          fastMode: queuedUpload.fastMode,
+          showLivePreview: queuedUpload.showLivePreview,
           onProgress: (status) => {
             updateUpload(queueItemId, (current) => applyStatusToUpload(current, status))
           },

@@ -30,9 +30,8 @@ import {
   DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
-import { Switch } from "@/components/ui/switch"
 import { FootageDatePicker } from "@/components/ui/footage-date-picker"
-import { AlertCircle, Calendar, ChevronDown, Loader2, MapPin, Pencil, Plus, ScanLine, Trash2, Video } from "lucide-react"
+import { AlertCircle, Calendar, ChevronDown, Loader2, MapPin, Pencil, Plus, Trash2, Video } from "lucide-react"
 import {
   createLocation,
   deleteLocation,
@@ -49,7 +48,6 @@ export default function SurveillancePage() {
   const router = useRouter()
   const pathname = usePathname()
   const searchParams = useSearchParams()
-  const [detectionMode, setDetectionMode] = useState(true)
   const [locationMenuOpen, setLocationMenuOpen] = useState(false)
   const [locationModalOpen, setLocationModalOpen] = useState(false)
   const [editingLocation, setEditingLocation] = useState<LocationRecord | null>(null)
@@ -226,11 +224,8 @@ export default function SurveillancePage() {
     locationId: string
     date: string
     startTime: string
-    endTime?: string
-    manualDurationHours?: number
-    manualDurationMinutes?: number
     countingConfig?: string
-    fastMode: boolean
+    showLivePreview?: boolean
   }) => {
     try {
       setPageError(null)
@@ -265,17 +260,6 @@ export default function SurveillancePage() {
               highlightedDates={footageDates}
               allowClear
             />
-
-            {/* Detection Mode Toggle */}
-            <div className="flex items-center gap-2 px-4 py-2.5 rounded-2xl bg-secondary border border-border">
-              <ScanLine className="w-4 h-4 text-muted-foreground" />
-              <span className="text-sm text-foreground">Detection</span>
-              <Switch
-                checked={detectionMode}
-                onCheckedChange={setDetectionMode}
-                className="data-[state=checked]:bg-accent"
-              />
-            </div>
 
             <DropdownMenu open={locationMenuOpen} onOpenChange={setLocationMenuOpen}>
               <DropdownMenuTrigger asChild>
@@ -371,7 +355,6 @@ export default function SurveillancePage() {
           ) : filteredLocations.length > 0 ? (
             <VideoGrid
               locations={filteredLocations}
-              detectionMode={detectionMode}
               onAddVideoClick={handleOpenAddVideo}
             />
           ) : (
