@@ -623,7 +623,7 @@ def _build_rtdetr_command(
         "-d",
         preferred_inference_device(),
         "--batch-size",
-        "32",
+        "16",
         "-a",
         str(annotations_path.resolve()),
     ]
@@ -756,10 +756,10 @@ def _runtime_timeout_seconds(video_path: Path) -> float:
     if detected_duration_seconds is None:
         return INFERENCE_MAX_RUNTIME_SECONDS
 
-    # Allow slower backbones enough runtime while still preventing indefinite hangs.
+    # Scale timeout with video length; no hard upper cap so long videos can complete.
     multiplier = 12.0
     base_timeout = max(180.0, (float(detected_duration_seconds) * multiplier) + 120.0)
-    return min(INFERENCE_MAX_RUNTIME_SECONDS, base_timeout)
+    return base_timeout
 
 
 def _terminate_process(process: subprocess.Popen[str]) -> None:
