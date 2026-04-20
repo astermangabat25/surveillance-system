@@ -20,15 +20,7 @@ node_modules/
 venv/
 
 # Local backend runtime data
-backend/storage/dev_data.json
-backend/storage/models/*
-!backend/storage/models/.gitkeep
-backend/storage/videos/raw/*
-!backend/storage/videos/raw/.gitkeep
-backend/storage/videos/processed/*
-!backend/storage/videos/processed/.gitkeep
-backend/storage/exports/*
-!backend/storage/exports/.gitkeep
+backend/storage/**
 .python-version
 __pycache__/
 

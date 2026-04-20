@@ -431,8 +431,8 @@ export default function DashboardPage() {
                   <div className="mt-3 rounded-xl border border-border/70 bg-background/60 p-3 text-[11px] text-muted-foreground">
                     <p className="font-medium text-foreground">Required files checklist</p>
                     <p className="mt-1">1. tools/infer.py in the RT-DETR repo</p>
-                    <p>2. Config in backend/storage/inference_requirements/configs/rtdetr/</p>
-                    <p>3. Counting config in backend/storage/inference_requirements/counting/</p>
+                    <p>2. Config in backend/inference_requirements/configs/rtdetr/</p>
+                    <p>3. Counting config in backend/inference_requirements/counting/</p>
                     <p>4. Active model weights (.pt or .pth)</p>
                   </div>
 

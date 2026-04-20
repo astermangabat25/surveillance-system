@@ -23,7 +23,8 @@ MAX_TRACK_EVENTS = 50
 TRACK_THUMBNAIL_MAX_EDGE = 224
 SEMANTIC_CROP_LABEL_ORDER = ("best", "early", "mid", "late")
 CLOCK_TIME_FORMATS = ("%H:%M", "%H:%M:%S", "%I:%M %p", "%I:%M:%S %p")
-INFERENCE_REQUIREMENTS_DIR = store.STORAGE_DIR / "inference_requirements"
+LEGACY_INFERENCE_REQUIREMENTS_DIR = store.STORAGE_DIR / "inference_requirements"
+INFERENCE_REQUIREMENTS_DIR = store.BACKEND_DIR / "inference_requirements"
 INFERENCE_CONFIGS_DIR = INFERENCE_REQUIREMENTS_DIR / "configs" / "rtdetr"
 INFERENCE_ANNOTATIONS_DIR = INFERENCE_REQUIREMENTS_DIR / "annotations"
 INFERENCE_COUNTING_DIR = INFERENCE_REQUIREMENTS_DIR / "counting"
@@ -116,19 +117,40 @@ def occlusion_repo_dir() -> Path:
     return _occlusion_repo_dir()
 
 
+def _ensure_inference_requirements_layout() -> None:
+    if INFERENCE_REQUIREMENTS_DIR.exists():
+        return
+
+    if LEGACY_INFERENCE_REQUIREMENTS_DIR.exists():
+        INFERENCE_REQUIREMENTS_DIR.mkdir(parents=True, exist_ok=True)
+        for child in LEGACY_INFERENCE_REQUIREMENTS_DIR.iterdir():
+            target = INFERENCE_REQUIREMENTS_DIR / child.name
+            if child.is_dir():
+                shutil.copytree(child, target, dirs_exist_ok=True)
+            elif child.is_file() and not target.exists():
+                target.write_bytes(child.read_bytes())
+        return
+
+    INFERENCE_REQUIREMENTS_DIR.mkdir(parents=True, exist_ok=True)
+
+
 def requirements_root_dir() -> Path:
+    _ensure_inference_requirements_layout()
     return INFERENCE_REQUIREMENTS_DIR
 
 
 def requirements_config_dir() -> Path:
+    _ensure_inference_requirements_layout()
     return INFERENCE_CONFIGS_DIR
 
 
 def requirements_annotations_dir() -> Path:
+    _ensure_inference_requirements_layout()
     return INFERENCE_ANNOTATIONS_DIR
 
 
 def requirements_counting_dir() -> Path:
+    _ensure_inference_requirements_layout()
     return INFERENCE_COUNTING_DIR
 
 
@@ -394,6 +416,7 @@ def resolve_model_path(model_name: Optional[str]) -> Optional[Path]:
 
 
 def ultralytics_status() -> dict[str, Any]:
+    _ensure_inference_requirements_layout()
     model_info = store.get_model_info()
     model_name = model_info.get("currentModel")
     model_path = resolve_model_path(model_name)

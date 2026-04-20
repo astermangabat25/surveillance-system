@@ -33,6 +33,14 @@ Docs:
 - `backend/storage/videos/processed/` → rendered detections / tracked exports
 - `backend/storage/exports/` → reports / downloadable artifacts
 
+## Required inference assets
+
+- `backend/inference_requirements/configs/` → RT-DETR config files
+- `backend/inference_requirements/annotations/` → required annotations JSON
+- `backend/inference_requirements/counting/` → counting line configs
+
+These required files are intentionally kept outside `backend/storage/` so `backend/storage/` can be fully git-ignored as runtime data.
+
 ## API endpoints included
 
 - `GET /api/locations`
