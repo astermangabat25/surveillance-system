@@ -79,9 +79,6 @@ function KPICard({
         <div className={`rounded-2xl p-3 ${colors.bg}`}>
           <Icon className={`h-5 w-5 ${colors.icon}`} />
         </div>
-        <div className="rounded-full bg-secondary px-2 py-1 text-[11px] font-medium text-muted-foreground">
-          Live
-        </div>
       </div>
 
       <p className={`mb-1 text-3xl font-bold ${colors.text}`}>{value}</p>
