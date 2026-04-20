@@ -262,6 +262,11 @@ class InferenceRequirementUploadResult(BaseModel):
     message: str
 
 
+class CountingConfigList(BaseModel):
+    options: list[str] = Field(default_factory=list)
+    defaultConfig: Optional[str] = None
+
+
 class VideoUploadStatus(BaseModel):
     uploadId: str
     state: Literal["queued", "processing", "complete", "error", "cancelled"]

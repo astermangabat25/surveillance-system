@@ -161,6 +161,12 @@ def requirements_counting_dir() -> Path:
     return INFERENCE_COUNTING_DIR
 
 
+def list_counting_config_names() -> list[str]:
+    counting_dir = requirements_counting_dir()
+    counting_dir.mkdir(parents=True, exist_ok=True)
+    return sorted(path.name for path in counting_dir.glob("*.json") if path.is_file())
+
+
 def _infer_script_path() -> Path:
     configured_script = str(os.getenv("RTDETR_INFER_SCRIPT") or "").strip()
     if configured_script:
@@ -299,6 +305,24 @@ def _infer_counting_config_path(location_name: Optional[str] = None) -> Path:
         return configured_path
 
     return fallback_path
+
+
+def resolve_counting_config_path(
+    selected_config_name: Optional[str] = None,
+    location_name: Optional[str] = None,
+) -> Path:
+    if selected_config_name:
+        raw_name = str(selected_config_name).strip()
+        if raw_name:
+            normalized_name = Path(raw_name).name
+            if not normalized_name.lower().endswith(".json"):
+                normalized_name = f"{normalized_name}.json"
+            explicit_path = requirements_counting_dir() / normalized_name
+            if explicit_path.exists() and explicit_path.is_file():
+                return explicit_path
+            raise FileNotFoundError(f"Selected counting config was not found: {normalized_name}")
+
+    return _infer_counting_config_path(location_name)
 
 
 def _first_missing_path(paths: list[Path]) -> Optional[Path]:
@@ -750,6 +774,15 @@ def _read_video_metadata(video_path: Path) -> tuple[float, Optional[int]]:
         capture.release()
 
     return (fps if fps > 0 else 30.0, frame_count if frame_count > 0 else None)
+
+
+def detect_video_duration_seconds(video_path: Path) -> Optional[int]:
+    fps, frame_count = _read_video_metadata(video_path)
+    if frame_count is None or fps <= 0:
+        return None
+
+    duration_seconds = int(round(float(frame_count) / float(fps)))
+    return duration_seconds if duration_seconds > 0 else None
 
 
 def _counts_csv_path(output_video_path: Path) -> Path:
@@ -1304,7 +1337,11 @@ def run_video_inference(
     save_dir = store.PROCESSED_VIDEOS_DIR / save_name
     save_dir.mkdir(parents=True, exist_ok=True)
     output_video_path = save_dir / f"{video_path.stem}-processed.mp4"
-    counting_config_path = _infer_counting_config_path((video_record or {}).get("location"))
+    selected_counting_config_name = str((video_record or {}).get("countingConfig") or "").strip() or None
+    counting_config_path = resolve_counting_config_path(
+        selected_config_name=selected_counting_config_name,
+        location_name=(video_record or {}).get("location"),
+    )
     annotations_path = _required_annotations_path()
     if not annotations_path.exists() or not annotations_path.is_file():
         raise RuntimeError(

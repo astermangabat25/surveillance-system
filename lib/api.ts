@@ -270,6 +270,11 @@ export interface InferenceRequirementUploadResult {
   message: string
 }
 
+export interface CountingConfigList {
+  options: string[]
+  defaultConfig?: string | null
+}
+
 export interface DownloadedReport {
   blob: Blob
   filename: string
@@ -446,7 +451,10 @@ export function uploadVideo(payload: {
   locationId: string
   date: string
   startTime: string
-  endTime: string
+  endTime?: string
+  manualDurationHours?: number
+  manualDurationMinutes?: number
+  countingConfig?: string
   fastMode?: boolean
   onProgress?: (status: VideoUploadStatus) => void
 }) {
@@ -456,7 +464,18 @@ export function uploadVideo(payload: {
   formData.set("locationId", payload.locationId)
   formData.set("date", payload.date)
   formData.set("startTime", payload.startTime)
-  formData.set("endTime", payload.endTime)
+  if (payload.endTime) {
+    formData.set("endTime", payload.endTime)
+  }
+  if (typeof payload.manualDurationHours === "number") {
+    formData.set("manualDurationHours", String(payload.manualDurationHours))
+  }
+  if (typeof payload.manualDurationMinutes === "number") {
+    formData.set("manualDurationMinutes", String(payload.manualDurationMinutes))
+  }
+  if (payload.countingConfig) {
+    formData.set("countingConfig", payload.countingConfig)
+  }
   formData.set("fastMode", String(Boolean(payload.fastMode)))
   formData.set("uploadId", uploadId)
 
@@ -629,6 +648,10 @@ export function getCurrentModel() {
 
 export function getInferenceStatus() {
   return request<InferenceStatus>("/api/inference/status")
+}
+
+export function getCountingConfigChoices() {
+  return request<CountingConfigList>("/api/inference/requirements/counting-configs")
 }
 
 export function uploadModel(file: File) {

@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
   Dialog,
   DialogContent,
@@ -20,6 +20,9 @@ import {
 } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
 import { FileVideo, Upload, Video, X, Zap } from "lucide-react"
+import { getCountingConfigChoices, uploadInferenceRequirement } from "@/lib/api"
+
+const LAST_COUNTING_CONFIG_STORAGE_KEY = "alive-last-counting-config"
 
 interface AddVideoModalProps {
   open: boolean
@@ -31,14 +34,12 @@ interface AddVideoModalProps {
     locationId: string
     date: string
     startTime: string
-    endTime: string
+    endTime?: string
+    manualDurationHours?: number
+    manualDurationMinutes?: number
+    countingConfig?: string
     fastMode: boolean
   }) => void | Promise<void>
-}
-
-function formatDurationHours(durationSeconds: number) {
-  const precision = durationSeconds < 60 ? 5 : durationSeconds < 3600 ? 4 : 2
-  return (durationSeconds / 3600).toFixed(precision).replace(/\.0+$/, "").replace(/(\.\d*?)0+$/, "$1")
 }
 
 function formatHumanDuration(totalSeconds: number) {
@@ -58,31 +59,30 @@ function formatHumanDuration(totalSeconds: number) {
   return parts.join(" ")
 }
 
-function computeSchedule(startTime: string, durationHours: string) {
+function computeSchedule(startTime: string, durationSeconds: number | null) {
   const [hoursPart, minutesPart, secondsPart = "0"] = startTime.split(":")
   const startHours = Number(hoursPart)
   const startMinutes = Number(minutesPart)
   const startSeconds = Number(secondsPart)
-  const parsedDuration = Number(durationHours)
 
-  if (!startTime || !Number.isFinite(startHours) || !Number.isFinite(startMinutes) || !Number.isFinite(startSeconds) || !Number.isFinite(parsedDuration) || parsedDuration <= 0) {
+  if (!startTime || !Number.isFinite(startHours) || !Number.isFinite(startMinutes) || !Number.isFinite(startSeconds) || !Number.isFinite(durationSeconds) || durationSeconds === null || durationSeconds <= 0) {
     return null
   }
 
-  const durationSeconds = Math.max(1, Math.round(parsedDuration * 3600))
-  const totalSeconds = startHours * 3600 + startMinutes * 60 + startSeconds + durationSeconds
+  const resolvedDurationSeconds = Math.max(1, Math.round(durationSeconds))
+  const totalSeconds = startHours * 3600 + startMinutes * 60 + startSeconds + resolvedDurationSeconds
   const dayOffset = Math.floor(totalSeconds / (24 * 3600))
   const endSeconds = ((totalSeconds % (24 * 3600)) + (24 * 3600)) % (24 * 3600)
   const endHours = Math.floor(endSeconds / 3600)
   const endMinuteValue = Math.floor((endSeconds % 3600) / 60)
   const endSecondValue = endSeconds % 60
-  const includeSeconds = endSecondValue > 0 || startTime.split(":").length === 3 || durationSeconds % 60 !== 0
+  const includeSeconds = endSecondValue > 0 || startTime.split(":").length === 3 || resolvedDurationSeconds % 60 !== 0
 
   return {
     endTime: includeSeconds
       ? `${endHours.toString().padStart(2, "0")}:${endMinuteValue.toString().padStart(2, "0")}:${endSecondValue.toString().padStart(2, "0")}`
       : `${endHours.toString().padStart(2, "0")}:${endMinuteValue.toString().padStart(2, "0")}`,
-    durationLabel: formatHumanDuration(durationSeconds),
+    durationLabel: formatHumanDuration(resolvedDurationSeconds),
     dayOffset,
   }
 }
@@ -208,22 +208,72 @@ export function AddVideoModal({ open, onOpenChange, locations, initialLocationId
   const [locationId, setLocationId] = useState("")
   const [date, setDate] = useState("")
   const [startTime, setStartTime] = useState("")
-  const [durationHours, setDurationHours] = useState("1")
+  const [manualDurationHours, setManualDurationHours] = useState("0")
+  const [manualDurationMinutes, setManualDurationMinutes] = useState("0")
   const [detectedDurationSeconds, setDetectedDurationSeconds] = useState<number | null>(null)
   const [durationError, setDurationError] = useState<string | null>(null)
+  const [countingOptions, setCountingOptions] = useState<string[]>([])
+  const [selectedCountingConfig, setSelectedCountingConfig] = useState("")
+  const [countingConfigError, setCountingConfigError] = useState<string | null>(null)
+  const [isLoadingCountingOptions, setIsLoadingCountingOptions] = useState(false)
+  const [isUploadingCountingConfig, setIsUploadingCountingConfig] = useState(false)
   const [submitError, setSubmitError] = useState<string | null>(null)
   const [isDetectingDuration, setIsDetectingDuration] = useState(false)
   const [fastMode, setFastMode] = useState(false)
   const [dragActive, setDragActive] = useState(false)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const countingConfigInputRef = useRef<HTMLInputElement>(null)
+
+  const selectedManualDurationSeconds = useMemo(() => {
+    const parsedHours = Number(manualDurationHours)
+    const parsedMinutes = Number(manualDurationMinutes)
+    if (!Number.isFinite(parsedHours) || !Number.isFinite(parsedMinutes)) {
+      return null
+    }
+
+    const normalizedHours = Math.max(0, Math.floor(parsedHours))
+    const normalizedMinutes = Math.max(0, Math.floor(parsedMinutes))
+    const totalSeconds = (normalizedHours * 3600) + (normalizedMinutes * 60)
+    return totalSeconds > 0 ? totalSeconds : null
+  }, [manualDurationHours, manualDurationMinutes])
+
+  const effectiveDurationSeconds = detectedDurationSeconds ?? selectedManualDurationSeconds
+
+  const refreshCountingOptions = useCallback(async () => {
+    setIsLoadingCountingOptions(true)
+    setCountingConfigError(null)
+
+    try {
+      const response = await getCountingConfigChoices()
+      const nextOptions = response.options ?? []
+      const savedSelection = typeof window !== "undefined" ? window.localStorage.getItem(LAST_COUNTING_CONFIG_STORAGE_KEY) : null
+      const fallbackSelection = response.defaultConfig && nextOptions.includes(response.defaultConfig) ? response.defaultConfig : nextOptions[0] ?? ""
+      const resolvedSelection = savedSelection && nextOptions.includes(savedSelection) ? savedSelection : fallbackSelection
+
+      setCountingOptions(nextOptions)
+      setSelectedCountingConfig((current) => {
+        if (current && nextOptions.includes(current)) {
+          return current
+        }
+        return resolvedSelection
+      })
+    } catch (error) {
+      setCountingConfigError(error instanceof Error ? error.message : "Failed to load counting configs.")
+      setCountingOptions([])
+      setSelectedCountingConfig("")
+    } finally {
+      setIsLoadingCountingOptions(false)
+    }
+  }, [])
 
   useEffect(() => {
     if (open) {
       setLocationId(initialLocationId ?? "")
       setSubmitError(null)
+      void refreshCountingOptions()
     }
-  }, [initialLocationId, open])
+  }, [initialLocationId, open, refreshCountingOptions])
 
   useEffect(() => {
     if (!selectedFile) {
@@ -242,7 +292,6 @@ export function AddVideoModal({ open, onOpenChange, locations, initialLocationId
         if (isCancelled) return
         const roundedSeconds = Math.max(1, Math.round(durationSeconds))
         setDetectedDurationSeconds(roundedSeconds)
-        setDurationHours(formatDurationHours(roundedSeconds))
       })
       .catch((error) => {
         if (isCancelled) return
@@ -260,7 +309,13 @@ export function AddVideoModal({ open, onOpenChange, locations, initialLocationId
     }
   }, [selectedFile])
 
-  const computedSchedule = useMemo(() => computeSchedule(startTime, durationHours), [durationHours, startTime])
+  useEffect(() => {
+    if (selectedCountingConfig && typeof window !== "undefined") {
+      window.localStorage.setItem(LAST_COUNTING_CONFIG_STORAGE_KEY, selectedCountingConfig)
+    }
+  }, [selectedCountingConfig])
+
+  const computedSchedule = useMemo(() => computeSchedule(startTime, effectiveDurationSeconds), [effectiveDurationSeconds, startTime])
 
   const submitDisabledReason = useMemo(() => {
     if (isSubmitting) {
@@ -287,12 +342,20 @@ export function AddVideoModal({ open, onOpenChange, locations, initialLocationId
       return "Choose a start time to continue."
     }
 
+    if (!selectedCountingConfig) {
+      return "Choose a counting config to continue."
+    }
+
+    if (detectedDurationSeconds === null && selectedManualDurationSeconds === null) {
+      return "Auto duration failed. Enter manual duration in hours and minutes to continue."
+    }
+
     if (!computedSchedule) {
       return "Enter a valid start time and duration to continue."
     }
 
     return null
-  }, [computedSchedule, date, isDetectingDuration, isSubmitting, locationId, selectedFile, startTime])
+  }, [computedSchedule, date, detectedDurationSeconds, isDetectingDuration, isSubmitting, locationId, selectedCountingConfig, selectedManualDurationSeconds, selectedFile, startTime])
 
   const handleDrag = (e: React.DragEvent) => {
     e.preventDefault()
@@ -326,8 +389,40 @@ export function AddVideoModal({ open, onOpenChange, locations, initialLocationId
     }
   }
 
+  const handleCountingConfigUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    event.target.value = ""
+    if (!file) {
+      return
+    }
+
+    if (!file.name.toLowerCase().endsWith(".json")) {
+      setCountingConfigError("Counting config upload must be a .json file.")
+      return
+    }
+
+    setIsUploadingCountingConfig(true)
+    setCountingConfigError(null)
+
+    try {
+      const result = await uploadInferenceRequirement({
+        file,
+        requirementType: "counting-config",
+      })
+      await refreshCountingOptions()
+      setSelectedCountingConfig(result.filename)
+    } catch (error) {
+      setCountingConfigError(error instanceof Error ? error.message : "Failed to upload counting config.")
+    } finally {
+      setIsUploadingCountingConfig(false)
+    }
+  }
+
   const handleSubmit = async () => {
-    if (!selectedFile || !locationId || !date || !startTime || !computedSchedule || isSubmitting) return
+    if (!selectedFile || !locationId || !date || !startTime || !computedSchedule || !selectedCountingConfig || isSubmitting) return
+
+    const manualHours = detectedDurationSeconds === null ? Math.max(0, Math.floor(Number(manualDurationHours) || 0)) : undefined
+    const manualMinutes = detectedDurationSeconds === null ? Math.max(0, Math.floor(Number(manualDurationMinutes) || 0)) : undefined
 
     setSubmitError(null)
     setIsSubmitting(true)
@@ -339,6 +434,9 @@ export function AddVideoModal({ open, onOpenChange, locations, initialLocationId
         date,
         startTime,
         endTime: computedSchedule.endTime,
+        manualDurationHours: manualHours,
+        manualDurationMinutes: manualMinutes,
+        countingConfig: selectedCountingConfig,
         fastMode,
       })
       handleClose()
@@ -354,14 +452,21 @@ export function AddVideoModal({ open, onOpenChange, locations, initialLocationId
     setLocationId("")
     setDate("")
     setStartTime("")
-    setDurationHours("1")
+    setManualDurationHours("0")
+    setManualDurationMinutes("0")
     setDetectedDurationSeconds(null)
     setDurationError(null)
+    setCountingConfigError(null)
     setSubmitError(null)
     setIsDetectingDuration(false)
+    setIsLoadingCountingOptions(false)
+    setIsUploadingCountingConfig(false)
     setFastMode(false)
     if (fileInputRef.current) {
       fileInputRef.current.value = ""
+    }
+    if (countingConfigInputRef.current) {
+      countingConfigInputRef.current.value = ""
     }
     onOpenChange(false)
   }
@@ -496,6 +601,55 @@ export function AddVideoModal({ open, onOpenChange, locations, initialLocationId
             </Select>
           </div>
 
+          <div className="space-y-2">
+            <div className="flex items-center justify-between gap-2">
+              <label className="text-sm font-medium text-foreground">Counting Config</label>
+              <input
+                ref={countingConfigInputRef}
+                type="file"
+                accept=".json,application/json"
+                onChange={(event) => {
+                  void handleCountingConfigUpload(event)
+                }}
+                className="hidden"
+              />
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="border-border"
+                disabled={isSubmitting || isUploadingCountingConfig}
+                onClick={() => countingConfigInputRef.current?.click()}
+              >
+                {isUploadingCountingConfig ? "Uploading..." : "Upload New"}
+              </Button>
+            </div>
+            <Select
+              value={selectedCountingConfig}
+              onValueChange={(value) => {
+                setSubmitError(null)
+                setCountingConfigError(null)
+                setSelectedCountingConfig(value)
+              }}
+              disabled={isLoadingCountingOptions || isSubmitting}
+            >
+              <SelectTrigger className="bg-secondary border-border text-foreground">
+                <SelectValue placeholder={isLoadingCountingOptions ? "Loading counting configs..." : "Select counting config"} />
+              </SelectTrigger>
+              <SelectContent className="bg-card border-border">
+                {countingOptions.map((configName) => (
+                  <SelectItem key={configName} value={configName} className="text-foreground">
+                    {configName}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-muted-foreground">
+              Choose an existing counting-line config or upload a new .json file.
+            </p>
+            {countingConfigError ? <p className="text-xs text-destructive">{countingConfigError}</p> : null}
+          </div>
+
           {/* Date */}
           <div className="space-y-2">
             <label className="text-sm font-medium text-foreground">Start Date</label>
@@ -525,28 +679,58 @@ export function AddVideoModal({ open, onOpenChange, locations, initialLocationId
               />
             </div>
             <div className="space-y-2">
-              <label className="text-sm font-medium text-foreground">Duration (Hours)</label>
-              <Input 
-                type="number"
-                min="0.0003"
-                step="0.0001"
-                inputMode="decimal"
-                value={durationHours}
-                onChange={(e) => {
-                  setSubmitError(null)
-                  setDurationHours(e.target.value)
-                }}
-                className="bg-secondary border-border text-foreground"
-              />
+              <label className="text-sm font-medium text-foreground">Detected Duration</label>
+              <div className="rounded-xl border border-border bg-secondary px-3 py-2 text-sm text-foreground">
+                {isDetectingDuration
+                  ? "Reading duration..."
+                  : detectedDurationSeconds !== null
+                    ? formatHumanDuration(detectedDurationSeconds)
+                    : "Unavailable"}
+              </div>
               <p className="text-xs text-muted-foreground">
                 {isDetectingDuration
-                  ? "Reading the uploaded file to auto-fill the true duration..."
+                  ? "Reading the uploaded file to auto-detect duration..."
                   : detectedDurationSeconds !== null
-                    ? `Auto-filled from video metadata: ${formatHumanDuration(detectedDurationSeconds)}.`
-                    : durationError ?? "Upload a file to auto-fill this value, then adjust it manually if needed."}
+                    ? "Duration is auto-detected from video metadata."
+                    : durationError ?? "Upload a file to auto-detect duration."}
               </p>
             </div>
           </div>
+
+          {detectedDurationSeconds === null && !isDetectingDuration ? (
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <label className="text-sm font-medium text-foreground">Manual Duration (Hours)</label>
+                <Input
+                  type="number"
+                  min="0"
+                  step="1"
+                  inputMode="numeric"
+                  value={manualDurationHours}
+                  onChange={(event) => {
+                    setSubmitError(null)
+                    setManualDurationHours(event.target.value)
+                  }}
+                  className="bg-secondary border-border text-foreground"
+                />
+              </div>
+              <div className="space-y-2">
+                <label className="text-sm font-medium text-foreground">Manual Duration (Minutes)</label>
+                <Input
+                  type="number"
+                  min="0"
+                  step="1"
+                  inputMode="numeric"
+                  value={manualDurationMinutes}
+                  onChange={(event) => {
+                    setSubmitError(null)
+                    setManualDurationMinutes(event.target.value)
+                  }}
+                  className="bg-secondary border-border text-foreground"
+                />
+              </div>
+            </div>
+          ) : null}
 
           <div className="rounded-xl border border-border bg-secondary/40 p-4">
             <div className="flex items-start justify-between gap-4">
@@ -597,7 +781,16 @@ export function AddVideoModal({ open, onOpenChange, locations, initialLocationId
           <Button 
             type="button"
             onClick={() => void handleSubmit()}
-            disabled={!selectedFile || !locationId || !date || !startTime || !computedSchedule || isSubmitting || isDetectingDuration}
+            disabled={
+              !selectedFile ||
+              !locationId ||
+              !date ||
+              !startTime ||
+              !computedSchedule ||
+              !selectedCountingConfig ||
+              isSubmitting ||
+              isDetectingDuration
+            }
             className="bg-primary text-primary-foreground hover:bg-primary/90"
           >
             {isSubmitting ? "Adding video..." : isDetectingDuration ? "Reading file..." : "Add Video"}

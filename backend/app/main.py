@@ -4,6 +4,7 @@ import json
 import os
 import re
 import shutil
+from datetime import datetime, timedelta
 from threading import Lock, Thread
 from pathlib import Path
 from typing import Any, Optional
@@ -90,6 +91,37 @@ def _inference_not_ready_detail(status: dict[str, Any]) -> str:
         return f"Inference engine is not ready. Missing required pipeline path: {missing_path}"
 
     return "Inference engine is not ready. Required inference pipeline artifacts are unavailable."
+
+
+def _parse_clock_time(value: str) -> Optional[datetime]:
+    cleaned = str(value or "").strip()
+    if not cleaned:
+        return None
+
+    for time_format in inference.CLOCK_TIME_FORMATS:
+        try:
+            return datetime.strptime(cleaned, time_format)
+        except ValueError:
+            continue
+
+    return None
+
+
+def _compute_end_time(start_time: str, duration_seconds: int) -> Optional[str]:
+    parsed_start_time = _parse_clock_time(start_time)
+    if parsed_start_time is None:
+        return None
+
+    include_seconds = start_time.count(":") >= 2 or duration_seconds % 60 != 0
+    end_time = parsed_start_time + timedelta(seconds=max(1, duration_seconds))
+    return end_time.strftime("%H:%M:%S" if include_seconds else "%H:%M")
+
+
+def _manual_duration_seconds(hours: Optional[int], minutes: Optional[int]) -> Optional[int]:
+    hour_value = max(0, int(hours or 0))
+    minute_value = max(0, int(minutes or 0))
+    total_seconds = (hour_value * 3600) + (minute_value * 60)
+    return total_seconds if total_seconds > 0 else None
 
 
 def search_google_places(query: str) -> list[dict[str, Any]]:
@@ -329,7 +361,10 @@ async def upload_video(
     locationId: str = Form(...),
     date: str = Form(...),
     startTime: str = Form(...),
-    endTime: str = Form(...),
+    endTime: Optional[str] = Form(None),
+    manualDurationHours: Optional[int] = Form(None),
+    manualDurationMinutes: Optional[int] = Form(None),
+    countingConfig: Optional[str] = Form(None),
     fastMode: bool = Form(False),
     uploadId: Optional[str] = Form(None),
 ) -> dict:
@@ -344,6 +379,40 @@ async def upload_video(
     raw_target = store.RAW_VIDEOS_DIR / f"{uuid4().hex[:8]}-{safe_name}"
     raw_target.write_bytes(await file.read())
 
+    selected_counting_config = str(countingConfig or "").strip() or None
+    if selected_counting_config:
+        try:
+            inference.resolve_counting_config_path(selected_counting_config)
+        except FileNotFoundError as exc:
+            raw_target.unlink(missing_ok=True)
+            detail = str(exc)
+            if uploadId:
+                store.set_upload_status(
+                    uploadId,
+                    state="error",
+                    progress_percent=None,
+                    message="Selected counting config was not found.",
+                    error=detail,
+                )
+            raise HTTPException(status_code=400, detail=detail) from exc
+
+    detected_duration_seconds = inference.detect_video_duration_seconds(raw_target)
+    fallback_duration_seconds = _manual_duration_seconds(manualDurationHours, manualDurationMinutes)
+    computed_end_time = _compute_end_time(startTime, detected_duration_seconds) if detected_duration_seconds else None
+    if computed_end_time is None and fallback_duration_seconds:
+        computed_end_time = _compute_end_time(startTime, fallback_duration_seconds)
+
+    resolved_end_time = computed_end_time or (str(endTime or "").strip() or None)
+    if not resolved_end_time:
+        raw_target.unlink(missing_ok=True)
+        detail = (
+            "Unable to determine video duration automatically. "
+            "Provide manual duration (hours/minutes) or a valid endTime."
+        )
+        if uploadId:
+            store.set_upload_status(uploadId, state="error", progress_percent=None, message="Video duration is required.", error=detail)
+        raise HTTPException(status_code=400, detail=detail)
+
     if uploadId:
         store.set_upload_status(
             uploadId,
@@ -355,7 +424,7 @@ async def upload_video(
             location_id=locationId,
             date=date,
             start_time=startTime,
-            end_time=endTime,
+            end_time=resolved_end_time,
             fast_mode=fastMode,
         )
 
@@ -365,7 +434,7 @@ async def upload_video(
                 "locationId": locationId,
                 "date": date,
                 "startTime": startTime,
-                "endTime": endTime,
+                "endTime": resolved_end_time,
                 "rawPath": str(raw_target.relative_to(store.BACKEND_DIR)),
             }
         )
@@ -376,6 +445,8 @@ async def upload_video(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     try:
+        video_for_inference = {**video, "countingConfig": selected_counting_config}
+
         def ensure_not_cancelled() -> None:
             if uploadId and store.is_upload_cancel_requested(uploadId):
                 raise InterruptedError("Video upload cancelled by user.")
@@ -410,11 +481,11 @@ async def upload_video(
 
         result = await run_in_threadpool(
             inference.run_video_inference,
-            raw_target,
-            None,
-            video,
-            fastMode,
-            handle_processing_progress,
+            video_path=raw_target,
+            model_name=None,
+            video_record=video_for_inference,
+            fast_mode=fastMode,
+            progress_callback=handle_processing_progress,
         )
         ensure_not_cancelled()
         if uploadId:
@@ -552,6 +623,16 @@ def get_current_model() -> dict:
 @app.get("/api/inference/status", response_model=schemas.InferenceStatus)
 def get_inference_status() -> dict:
     return inference.ultralytics_status()
+
+
+@app.get("/api/inference/requirements/counting-configs", response_model=schemas.CountingConfigList)
+def list_counting_configs() -> dict[str, object]:
+    options = inference.list_counting_config_names()
+    default_config = inference.resolve_counting_config_path().name if options else None
+    return {
+        "options": options,
+        "defaultConfig": default_config,
+    }
 
 
 @app.post("/api/inference/requirements/upload", response_model=schemas.InferenceRequirementUploadResult, status_code=201)

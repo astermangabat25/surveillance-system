@@ -226,7 +226,10 @@ export default function SurveillancePage() {
     locationId: string
     date: string
     startTime: string
-    endTime: string
+    endTime?: string
+    manualDurationHours?: number
+    manualDurationMinutes?: number
+    countingConfig?: string
     fastMode: boolean
   }) => {
     try {

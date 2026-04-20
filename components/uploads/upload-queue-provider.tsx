@@ -23,7 +23,10 @@ export interface EnqueuedUploadInput {
   locationName: string
   date: string
   startTime: string
-  endTime: string
+  endTime?: string
+  manualDurationHours?: number
+  manualDurationMinutes?: number
+  countingConfig?: string
   fastMode: boolean
 }
 
@@ -37,6 +40,9 @@ export interface UploadQueueItem {
   date: string
   startTime: string
   endTime: string
+  manualDurationHours: number | null
+  manualDurationMinutes: number | null
+  countingConfig: string | null
   fastMode: boolean
   uploadId: string | null
   state: UploadState
@@ -143,7 +149,10 @@ function createQueuedItem(input: EnqueuedUploadInput): UploadQueueItem {
     locationName: input.locationName,
     date: input.date,
     startTime: input.startTime,
-    endTime: input.endTime,
+    endTime: input.endTime ?? "",
+    manualDurationHours: typeof input.manualDurationHours === "number" ? input.manualDurationHours : null,
+    manualDurationMinutes: typeof input.manualDurationMinutes === "number" ? input.manualDurationMinutes : null,
+    countingConfig: input.countingConfig ?? null,
     fastMode: input.fastMode,
     uploadId: null,
     state: "queued",
@@ -178,6 +187,9 @@ function createUploadFromHistory(status: VideoUploadStatus): UploadQueueItem {
     date: status.date ?? "",
     startTime: status.startTime ?? "",
     endTime: status.endTime ?? "",
+    manualDurationHours: null,
+    manualDurationMinutes: null,
+    countingConfig: null,
     fastMode: Boolean(status.fastMode),
     uploadId: status.uploadId,
     state: status.state,
@@ -281,6 +293,9 @@ function restoreUpload(value: unknown): UploadQueueItem | null {
     date: upload.date,
     startTime: upload.startTime,
     endTime: upload.endTime,
+    manualDurationHours: typeof upload.manualDurationHours === "number" ? upload.manualDurationHours : null,
+    manualDurationMinutes: typeof upload.manualDurationMinutes === "number" ? upload.manualDurationMinutes : null,
+    countingConfig: typeof upload.countingConfig === "string" ? upload.countingConfig : null,
     fastMode: Boolean(upload.fastMode),
     uploadId: typeof upload.uploadId === "string" ? upload.uploadId : null,
     state: upload.state,
@@ -574,7 +589,10 @@ export function UploadQueueProvider({ children }: { children: ReactNode }) {
           locationId: queuedUpload.locationId,
           date: queuedUpload.date,
           startTime: queuedUpload.startTime,
-          endTime: queuedUpload.endTime,
+          endTime: queuedUpload.endTime || undefined,
+          manualDurationHours: queuedUpload.manualDurationHours ?? undefined,
+          manualDurationMinutes: queuedUpload.manualDurationMinutes ?? undefined,
+          countingConfig: queuedUpload.countingConfig ?? undefined,
           fastMode: queuedUpload.fastMode,
           onProgress: (status) => {
             updateUpload(queueItemId, (current) => applyStatusToUpload(current, status))
