@@ -6,6 +6,7 @@ import { WalkingLoader } from "@/components/ui/walking-loader"
 
 const MAX_CONCURRENT_UPLOADS = 2
 const UPLOAD_QUEUE_STORAGE_KEY = "alive-upload-queue"
+const DISMISSED_UPLOAD_IDS_STORAGE_KEY = "alive-dismissed-upload-ids"
 const REHYDRATION_POLL_INTERVAL_MS = 1_000
 const HISTORY_REFRESH_INTERVAL_MS = 5_000
 
@@ -254,6 +255,51 @@ function mergeUploadsWithHistory(currentUploads: UploadQueueItem[], history: Vid
   return mergedUploads
 }
 
+function readDismissedUploadIds() {
+  if (typeof window === "undefined") {
+    return new Set<string>()
+  }
+
+  try {
+    const raw = window.localStorage.getItem(DISMISSED_UPLOAD_IDS_STORAGE_KEY)
+    if (!raw) {
+      return new Set<string>()
+    }
+
+    const parsed = JSON.parse(raw)
+    if (!Array.isArray(parsed)) {
+      window.localStorage.removeItem(DISMISSED_UPLOAD_IDS_STORAGE_KEY)
+      return new Set<string>()
+    }
+
+    return new Set(parsed.filter((value): value is string => typeof value === "string" && value.trim().length > 0))
+  } catch {
+    window.localStorage.removeItem(DISMISSED_UPLOAD_IDS_STORAGE_KEY)
+    return new Set<string>()
+  }
+}
+
+function writeDismissedUploadIds(ids: Set<string>) {
+  if (typeof window === "undefined") {
+    return
+  }
+
+  if (ids.size === 0) {
+    window.localStorage.removeItem(DISMISSED_UPLOAD_IDS_STORAGE_KEY)
+    return
+  }
+
+  window.localStorage.setItem(DISMISSED_UPLOAD_IDS_STORAGE_KEY, JSON.stringify(Array.from(ids)))
+}
+
+function filterHistoryByDismissedUploads(history: VideoUploadStatus[], dismissedUploadIds: Set<string>) {
+  if (dismissedUploadIds.size === 0) {
+    return history
+  }
+
+  return history.filter((status) => !isTerminalState(status.state) || !dismissedUploadIds.has(status.uploadId))
+}
+
 function serializeUpload(upload: UploadQueueItem): PersistedUploadQueueItem {
   const { file: _file, ...persistedUpload } = upload
   return persistedUpload
@@ -365,6 +411,7 @@ export function UploadQueueProvider({ children }: { children: ReactNode }) {
   const uploadsRef = useRef<UploadQueueItem[]>([])
   const launchingIdsRef = useRef(new Set<string>())
   const settledIdsRef = useRef(new Set<string>())
+  const dismissedUploadIdsRef = useRef(new Set<string>())
   const hasHydratedRef = useRef(false)
 
   useEffect(() => {
@@ -375,6 +422,8 @@ export function UploadQueueProvider({ children }: { children: ReactNode }) {
     hasHydratedRef.current = true
     let isCancelled = false
     let parsedUploads: UploadQueueItem[] = []
+
+    dismissedUploadIdsRef.current = readDismissedUploadIds()
 
     try {
       const storedUploads = window.localStorage.getItem(UPLOAD_QUEUE_STORAGE_KEY)
@@ -395,7 +444,7 @@ export function UploadQueueProvider({ children }: { children: ReactNode }) {
 
     const rehydrateBackendHistory = async () => {
       try {
-        const history = await getVideoUploadHistory()
+        const history = filterHistoryByDismissedUploads(await getVideoUploadHistory(), dismissedUploadIdsRef.current)
         if (isCancelled || history.length === 0) {
           return
         }
@@ -545,7 +594,7 @@ export function UploadQueueProvider({ children }: { children: ReactNode }) {
 
     const refreshHistory = async () => {
       try {
-        const history = await getVideoUploadHistory()
+        const history = filterHistoryByDismissedUploads(await getVideoUploadHistory(), dismissedUploadIdsRef.current)
         if (isCancelled || history.length === 0) {
           return
         }
@@ -749,6 +798,15 @@ export function UploadQueueProvider({ children }: { children: ReactNode }) {
 
   const clearQueue = useCallback(() => {
     setUploads((currentUploads) => {
+      const nextDismissedUploadIds = new Set(dismissedUploadIdsRef.current)
+      currentUploads.forEach((upload) => {
+        if (isTerminalState(upload.state) && upload.uploadId) {
+          nextDismissedUploadIds.add(upload.uploadId)
+        }
+      })
+      dismissedUploadIdsRef.current = nextDismissedUploadIds
+      writeDismissedUploadIds(nextDismissedUploadIds)
+
       const nextUploads = currentUploads.filter((upload) => !isTerminalState(upload.state))
       settledIdsRef.current = new Set(nextUploads.filter((upload) => isTerminalState(upload.state)).map((upload) => upload.id))
       return nextUploads
