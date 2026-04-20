@@ -4567,6 +4567,100 @@ def test_dashboard_los_returns_no_data_after_short_video_footage_window(monkeypa
     assert twelve_bucket["los"] is None
 
 
+@pytest.mark.parametrize(
+    ("walkable_area_m2", "expected_mode"),
+    [(18.0, "strict-fhwa"), (None, "roi-testing")],
+)
+def test_dashboard_occlusion_reuses_los_sample_source_when_tracks_are_missing(
+    monkeypatch,
+    tmp_path: Path,
+    walkable_area_m2: Optional[float],
+    expected_mode: str,
+) -> None:
+    configure_temp_storage(monkeypatch, tmp_path)
+
+    state = store.seed_state()
+    for location in state["locations"]:
+        if location["id"] != "gate-2-9":
+            continue
+        location["walkableAreaM2"] = walkable_area_m2
+        location["roiCoordinates"] = {
+            "referenceSize": [1920, 1080],
+            "includePolygonsNorm": [[[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]],
+        }
+
+    state["videos"] = [
+        {
+            "id": "video-occlusion-source-alignment",
+            "locationId": "gate-2-9",
+            "location": "Gate 2.9",
+            "timestamp": "10:00:00",
+            "date": "2026-03-17",
+            "startTime": "10:00:00",
+            "endTime": "10:10:00",
+            "gpsLat": 14.6397,
+            "gpsLng": 121.0775,
+            "pedestrianCount": 1,
+            "rawPath": None,
+            "processedPath": None,
+        }
+    ]
+    state["events"] = [
+        {
+            "id": "event-occlusion-source-alignment",
+            "type": "detection",
+            "location": "Gate 2.9",
+            "timestamp": "10:00:20",
+            "description": "Pedestrian ID #1 detected at frame 1",
+            "videoId": "video-occlusion-source-alignment",
+            "pedestrianId": 1,
+            "frame": 1,
+            "offsetSeconds": 20.0,
+            "occlusionClass": 2,
+        }
+    ]
+    state["pedestrianTracks"] = []
+    store.save_state(state)
+
+    with TestClient(main.app) as client:
+        los_response = client.get(
+            "/api/dashboard/los",
+            params={
+                "date": "2026-03-17",
+                "timeRange": "12h",
+                "startTime": "10:00",
+                "locationId": "gate-2-9",
+            },
+        )
+        occlusion_response = client.get(
+            "/api/dashboard/occlusion",
+            params={
+                "date": "2026-03-17",
+                "timeRange": "12h",
+                "startTime": "10:00",
+            },
+        )
+
+    assert los_response.status_code == 200
+    los_payload = los_response.json()
+    ten_los_bucket = next(point for point in los_payload["series"] if point["time"] == "10:00")
+    assert isinstance(ten_los_bucket["los"], float)
+    assert 1.0 <= float(ten_los_bucket["los"]) <= 6.0
+
+    assert occlusion_response.status_code == 200
+    occlusion_payload = occlusion_response.json()
+    assert "10:00" in occlusion_payload["availableHours"]
+
+    edsa_sec_walk = next(location for location in occlusion_payload["locations"] if location["id"] == "gate-2-9")
+    ten_occlusion_bucket = next(score for score in edsa_sec_walk["hourlyScores"] if score["hour"] == "10:00")
+
+    assert edsa_sec_walk["mode"] == expected_mode
+    assert edsa_sec_walk["hasPTSIData"] is True
+    assert edsa_sec_walk["los"] in {"A", "B", "C", "D", "E", "F"}
+    assert ten_occlusion_bucket["los"] in {"A", "B", "C", "D", "E", "F"}
+    assert ten_occlusion_bucket["uniquePedestrians"] is None
+
+
 def test_dashboard_occlusion_trends_groups_in_out_by_location_id_not_name(monkeypatch, tmp_path: Path) -> None:
     configure_temp_storage(monkeypatch, tmp_path)
 

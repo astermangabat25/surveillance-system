@@ -3804,10 +3804,16 @@ def dashboard_los(
 
 
 def dashboard_occlusion(date: Optional[str] = None, time_range: str = "12h", start_time: Optional[str] = None) -> dict[str, Any]:
-    state, resolved_date, videos, _events = _filtered_dashboard_records(date)
+    state, resolved_date, videos, events = _filtered_dashboard_records(date)
     videos_by_id = {video["id"]: video for video in videos}
     locations_by_id = {location["id"]: location for location in state["locations"]}
+    location_id_by_name = {
+        str(video.get("location") or ""): str(video.get("locationId") or "")
+        for video in videos
+        if video.get("location") and video.get("locationId")
+    }
     pedestrian_tracks = _filtered_pedestrian_tracks(state, videos)
+    analytics_samples, _first_seen_by_track = _build_analytics_samples(videos, events, pedestrian_tracks)
 
     sample_observations: list[dict[str, Any]] = []
     observation_times: list[datetime] = []
@@ -3841,6 +3847,38 @@ def dashboard_occlusion(date: Optional[str] = None, time_range: str = "12h", sta
                 }
             )
 
+    fallback_samples_by_second: dict[str, dict[datetime, dict[str, float]]] = {}
+    for sample in analytics_samples:
+        location_name = str(sample.get("location") or "")
+        location_id = location_id_by_name.get(location_name)
+        if not location_id:
+            continue
+
+        observed_at = sample.get("observedAt")
+        if not isinstance(observed_at, datetime):
+            continue
+        second_at = observed_at.replace(microsecond=0)
+        observation_times.append(second_at)
+
+        location_seconds = fallback_samples_by_second.setdefault(location_id, {})
+        second_rollup = location_seconds.setdefault(
+            second_at,
+            {
+                "sampleCount": 0.0,
+                "visibleTotal": 0.0,
+                "lightTotal": 0.0,
+                "moderateTotal": 0.0,
+                "heavyTotal": 0.0,
+            },
+        )
+
+        class_counts = sample.get("classCounts") or {}
+        second_rollup["sampleCount"] += 1.0
+        second_rollup["visibleTotal"] += float(sample.get("visibleCount") or 0.0)
+        second_rollup["lightTotal"] += float(class_counts.get(0) or 0.0)
+        second_rollup["moderateTotal"] += float(class_counts.get(1) or 0.0)
+        second_rollup["heavyTotal"] += float(class_counts.get(2) or 0.0)
+
     if not observation_times:
         observation_times = [timestamp for timestamp in (_observation_time(video) for video in videos) if timestamp is not None]
 
@@ -3866,6 +3904,13 @@ def dashboard_occlusion(date: Optional[str] = None, time_range: str = "12h", sta
         existing_occlusion = track_occlusions[track_key]
         if incoming_occlusion is not None and (existing_occlusion is None or int(incoming_occlusion) > int(existing_occlusion)):
             track_occlusions[track_key] = incoming_occlusion
+
+    for location_id, samples_by_second in fallback_samples_by_second.items():
+        location_seconds = second_metrics.setdefault(location_id, {})
+        for second_at, counts in samples_by_second.items():
+            if second_at in location_seconds:
+                continue
+            location_seconds[second_at] = {"counts": counts}
 
     available_hours: set[str] = set()
     active_location_ids = _active_location_ids(videos)
@@ -3900,13 +3945,26 @@ def dashboard_occlusion(date: Optional[str] = None, time_range: str = "12h", sta
 
         for second_at, second_entry in sorted(second_metrics.get(location["id"], {}).items()):
             track_occlusions = second_entry.get("tracks") or {}
-            visible_count = len(track_occlusions)
+            counts = second_entry.get("counts") or {}
+            has_track_details = bool(track_occlusions)
+
+            if has_track_details:
+                visible_count = len(track_occlusions)
+                light_count = sum(1 for value in track_occlusions.values() if value == 0)
+                moderate_count = sum(1 for value in track_occlusions.values() if value == 1)
+                heavy_count = sum(1 for value in track_occlusions.values() if value == 2)
+            else:
+                sample_count = float(counts.get("sampleCount") or 0.0)
+                if sample_count <= 0:
+                    continue
+                visible_count = int(round(float(counts.get("visibleTotal") or 0.0) / sample_count))
+                light_count = int(round(float(counts.get("lightTotal") or 0.0) / sample_count))
+                moderate_count = int(round(float(counts.get("moderateTotal") or 0.0) / sample_count))
+                heavy_count = int(round(float(counts.get("heavyTotal") or 0.0) / sample_count))
+
             if visible_count <= 0:
                 continue
 
-            light_count = sum(1 for value in track_occlusions.values() if value == 0)
-            moderate_count = sum(1 for value in track_occlusions.values() if value == 1)
-            heavy_count = sum(1 for value in track_occlusions.values() if value == 2)
             occlusion_value = (
                 (light_count * PTSI_OCCLUSION_WEIGHTS[0])
                 + (moderate_count * PTSI_OCCLUSION_WEIGHTS[1])
@@ -3960,7 +4018,8 @@ def dashboard_occlusion(date: Optional[str] = None, time_range: str = "12h", sta
             if los_rank is not None:
                 hour_rollup["losRanks"].append(los_rank)
                 all_los_ranks.append(int(los_rank))
-            hour_rollup["trackKeys"].update(track_occlusions.keys())
+            if has_track_details:
+                hour_rollup["trackKeys"].update(track_occlusions.keys())
 
             all_scores.append(second_score)
             total_visible += visible_count
@@ -3968,7 +4027,8 @@ def dashboard_occlusion(date: Optional[str] = None, time_range: str = "12h", sta
             total_moderate += moderate_count
             total_heavy += heavy_count
             total_sample_seconds += 1
-            unique_track_keys.update(track_occlusions.keys())
+            if has_track_details:
+                unique_track_keys.update(track_occlusions.keys())
 
         hourly_scores = []
         for hour_label, rollup in sorted(hourly_rollups.items()):
@@ -3983,7 +4043,7 @@ def dashboard_occlusion(date: Optional[str] = None, time_range: str = "12h", sta
                 "score": hourly_score_value,
                 "mode": mode,
                 "averagePedestrians": round(visible_total / sample_seconds, 2) if sample_seconds else 0.0,
-                "uniquePedestrians": len(rollup["trackKeys"]),
+                "uniquePedestrians": len(rollup["trackKeys"]) if rollup["trackKeys"] else None,
                 "occlusionMix": _ptsi_occlusion_mix(
                     int(rollup["light"]),
                     int(rollup["moderate"]),
@@ -4016,7 +4076,7 @@ def dashboard_occlusion(date: Optional[str] = None, time_range: str = "12h", sta
         overall_score = round(_percentile(all_scores, 90), 2) if all_scores else None
         selected_mode = mode
         selected_average_pedestrians = round(total_visible / total_sample_seconds, 2) if total_sample_seconds else None
-        selected_unique_pedestrians = len(unique_track_keys) if has_occlusion_data else None
+        selected_unique_pedestrians = len(unique_track_keys) if unique_track_keys else None
         selected_occlusion_mix = _ptsi_occlusion_mix(total_light, total_moderate, total_heavy, total_visible) if total_visible else None
         selected_los = _ptsi_los_from_score(overall_score) if mode == "roi-testing" else _ptsi_los_from_rank(max(all_los_ranks) if all_los_ranks else None)
         selected_los_description = _ptsi_los_description(selected_los)
