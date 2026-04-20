@@ -21,6 +21,9 @@ venv/
 
 # Local backend runtime data
 backend/storage/**
+backend/app/__pycache__/
+**/__pycache__/
+*.py[cod]
 .python-version
 __pycache__/
 
