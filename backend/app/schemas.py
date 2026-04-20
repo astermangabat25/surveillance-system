@@ -239,6 +239,7 @@ class ModelInfo(BaseModel):
     currentModel: Optional[str] = None
     uploadedAt: Optional[str] = None
     inferConfig: Optional[str] = None
+    batchSize: Optional[int] = None
 
 
 class InferenceStatus(BaseModel):

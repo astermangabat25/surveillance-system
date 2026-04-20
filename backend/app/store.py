@@ -1452,7 +1452,7 @@ def _location_payload(location: dict[str, Any]) -> dict[str, Any]:
 
 def seed_state() -> dict[str, Any]:
     return {
-        "model": {"currentModel": "yolov8n-bytetrack.pt", "uploadedAt": None, "inferConfig": None},
+        "model": {"currentModel": "yolov8n-bytetrack.pt", "uploadedAt": None, "inferConfig": None, "batchSize": 16},
         "locations": [
             {
                 "id": "gate-2",
@@ -1563,6 +1563,9 @@ def load_state() -> dict[str, Any]:
     model_state = state.get("model")
     if isinstance(model_state, dict) and "inferConfig" not in model_state:
         model_state["inferConfig"] = None
+        changed = True
+    if isinstance(model_state, dict) and "batchSize" not in model_state:
+        model_state["batchSize"] = 16
         changed = True
 
     for track in state.get("pedestrianTracks", []):
@@ -1945,14 +1948,30 @@ def get_model_info() -> dict[str, Any]:
     return deepcopy(load_state()["model"])
 
 
-def set_model(filename: str, infer_config: Optional[str] = None) -> dict[str, Any]:
+def set_model(filename: str, infer_config: Optional[str] = None, batch_size: Optional[int] = None) -> dict[str, Any]:
     state = load_state()
     previous_model = state.get("model", {})
     next_infer_config = infer_config if infer_config is not None else previous_model.get("inferConfig")
+    next_batch_size = batch_size if batch_size is not None else previous_model.get("batchSize")
     state["model"] = {
         "currentModel": filename,
         "uploadedAt": datetime.utcnow().isoformat(timespec="seconds") + "Z",
         "inferConfig": next_infer_config,
+        "batchSize": int(next_batch_size) if next_batch_size is not None else 16,
+    }
+    save_state(state)
+    return deepcopy(state["model"])
+
+
+def update_model_settings(*, infer_config: Optional[str] = None, batch_size: Optional[int] = None) -> dict[str, Any]:
+    state = load_state()
+    previous_model = state.get("model", {})
+
+    state["model"] = {
+        "currentModel": previous_model.get("currentModel"),
+        "uploadedAt": previous_model.get("uploadedAt"),
+        "inferConfig": infer_config if infer_config is not None else previous_model.get("inferConfig"),
+        "batchSize": int(batch_size) if batch_size is not None else int(previous_model.get("batchSize") or 16),
     }
     save_state(state)
     return deepcopy(state["model"])

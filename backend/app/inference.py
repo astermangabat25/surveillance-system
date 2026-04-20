@@ -623,7 +623,7 @@ def _build_rtdetr_command(
         "-d",
         preferred_inference_device(),
         "--batch-size",
-        "16",
+        str(_model_batch_size()),
         "-a",
         str(annotations_path.resolve()),
     ]
@@ -632,6 +632,18 @@ def _build_rtdetr_command(
         command.append("--display")
 
     return command
+
+
+def _model_batch_size() -> int:
+    model_info = store.get_model_info()
+    raw_value = model_info.get("batchSize")
+
+    try:
+        parsed_value = int(raw_value)
+    except (TypeError, ValueError):
+        return 16
+
+    return max(1, min(256, parsed_value))
 
 
 def _wait_for_process_with_cancellation(

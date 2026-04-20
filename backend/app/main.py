@@ -82,6 +82,22 @@ def safe_filename(filename: str) -> str:
     return cleaned.strip("-") or "upload.bin"
 
 
+def _validated_batch_size(batch_size: Optional[str]) -> Optional[int]:
+    normalized = str(batch_size or "").strip()
+    if not normalized:
+        return None
+
+    try:
+        parsed_value = int(normalized)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="batchSize must be an integer.") from exc
+
+    if parsed_value < 1 or parsed_value > 256:
+        raise HTTPException(status_code=400, detail="batchSize must be between 1 and 256.")
+
+    return parsed_value
+
+
 def _inference_not_ready_detail(status: dict[str, Any]) -> str:
     if not status.get("modelExists"):
         return "Inference engine is not ready. Upload a valid model before processing videos."
@@ -741,6 +757,7 @@ async def upload_inference_requirement(
 async def upload_model(
     file: UploadFile = File(...),
     inferConfig: Optional[str] = Form(None),
+    batchSize: Optional[str] = Form(None),
 ) -> dict:
     filename = safe_filename(file.filename or "model.pt")
     suffix = Path(filename).suffix.lower()
@@ -757,6 +774,31 @@ async def upload_model(
             raise HTTPException(status_code=400, detail=f"Unknown infer config: {normalized_name}")
         selected_infer_config = normalized_name
 
+    validated_batch_size = _validated_batch_size(batchSize)
+
     target = store.MODELS_DIR / filename
     target.write_bytes(await file.read())
-    return store.set_model(filename, infer_config=selected_infer_config)
+    return store.set_model(filename, infer_config=selected_infer_config, batch_size=validated_batch_size)
+
+
+@app.post("/api/models/settings", response_model=schemas.ModelInfo)
+def update_model_settings(
+    inferConfig: Optional[str] = Form(None),
+    batchSize: Optional[str] = Form(None),
+) -> dict:
+    selected_infer_config = str(inferConfig or "").strip() or None
+    if selected_infer_config:
+        available_configs = set(inference.list_infer_config_names())
+        normalized_name = Path(selected_infer_config).name
+        if Path(normalized_name).suffix.lower() not in {".yml", ".yaml"}:
+            normalized_name = f"{normalized_name}.yml"
+        if normalized_name not in available_configs:
+            raise HTTPException(status_code=400, detail=f"Unknown infer config: {normalized_name}")
+        selected_infer_config = normalized_name
+
+    validated_batch_size = _validated_batch_size(batchSize)
+
+    if selected_infer_config is None and validated_batch_size is None:
+        raise HTTPException(status_code=400, detail="Provide inferConfig and/or batchSize.")
+
+    return store.update_model_settings(infer_config=selected_infer_config, batch_size=validated_batch_size)

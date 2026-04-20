@@ -245,6 +245,7 @@ export interface ModelInfo {
   currentModel?: string | null
   uploadedAt?: string | null
   inferConfig?: string | null
+  batchSize?: number | null
 }
 
 export interface InferenceStatus {
@@ -662,14 +663,32 @@ export function getCountingConfigChoices() {
   return request<CountingConfigList>("/api/inference/requirements/counting-configs")
 }
 
-export function uploadModel(file: File, inferConfig?: string) {
+export function uploadModel(file: File, inferConfig?: string, batchSize?: number) {
   const formData = new FormData()
   formData.set("file", file)
   if (inferConfig) {
     formData.set("inferConfig", inferConfig)
   }
+  if (typeof batchSize === "number" && Number.isFinite(batchSize)) {
+    formData.set("batchSize", String(Math.trunc(batchSize)))
+  }
 
   return request<ModelInfo>("/api/models/upload", {
+    method: "POST",
+    body: formData,
+  })
+}
+
+export function updateModelSettings(payload: { inferConfig?: string; batchSize?: number }) {
+  const formData = new FormData()
+  if (payload.inferConfig) {
+    formData.set("inferConfig", payload.inferConfig)
+  }
+  if (typeof payload.batchSize === "number" && Number.isFinite(payload.batchSize)) {
+    formData.set("batchSize", String(Math.trunc(payload.batchSize)))
+  }
+
+  return request<ModelInfo>("/api/models/settings", {
     method: "POST",
     body: formData,
   })

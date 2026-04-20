@@ -9,6 +9,7 @@ import { AISynthesis } from "@/components/dashboard/ai-synthesis"
 import { useUploadQueue } from "@/components/uploads/upload-queue-provider"
 import { Button } from "@/components/ui/button"
 import { FootageDatePicker } from "@/components/ui/footage-date-picker"
+import { Input } from "@/components/ui/input"
 import {
   Select,
   SelectContent,
@@ -40,6 +41,7 @@ import {
   getLocations,
   uploadInferenceRequirement,
   uploadModel,
+  updateModelSettings,
   type AISynthesisResponse,
   type DashboardSummary,
   type InferConfigList,
@@ -135,6 +137,7 @@ export default function DashboardPage() {
   const [modelDialogOpen, setModelDialogOpen] = useState(false)
   const [modelFile, setModelFile] = useState<File | null>(null)
   const [selectedInferConfig, setSelectedInferConfig] = useState("")
+  const [modelBatchSize, setModelBatchSize] = useState("16")
   const [inferConfigChoices, setInferConfigChoices] = useState<InferConfigList>({ options: [], defaultConfig: null })
   const [requirementFile, setRequirementFile] = useState<File | null>(null)
   const [requirementType, setRequirementType] = useState<InferenceRequirementType>("infer-config")
@@ -155,6 +158,7 @@ export default function DashboardPage() {
   const [dashboardLoading, setDashboardLoading] = useState(true)
   const [modelLoading, setModelLoading] = useState(true)
   const [modelUploading, setModelUploading] = useState(false)
+  const [modelSettingsSaving, setModelSettingsSaving] = useState(false)
   const [requirementUploading, setRequirementUploading] = useState(false)
   const [reportExporting, setReportExporting] = useState(false)
   const [dashboardError, setDashboardError] = useState<string | null>(null)
@@ -217,6 +221,7 @@ export default function DashboardPage() {
         (configFromModel && inferConfigResponse.options.includes(configFromModel) ? configFromModel : "") ||
         (inferConfigResponse.defaultConfig ?? "")
       setSelectedInferConfig(nextSelectedConfig)
+      setModelBatchSize(String(modelResponse.batchSize ?? 16))
       setModelError(null)
     } catch (error) {
       setModelError(error instanceof Error ? error.message : "Failed to load model information.")
@@ -282,13 +287,14 @@ export default function DashboardPage() {
   }, [loadDashboard, loadFootageDates, settledUploadsVersion])
 
   const handleModelUpload = async () => {
-    if (!modelFile || !selectedInferConfig) {
+    const parsedBatchSize = Number.parseInt(modelBatchSize, 10)
+    if (!modelFile || !selectedInferConfig || !Number.isFinite(parsedBatchSize) || parsedBatchSize < 1 || parsedBatchSize > 256) {
       return
     }
 
     setModelUploading(true)
     try {
-      await uploadModel(modelFile, selectedInferConfig)
+      await uploadModel(modelFile, selectedInferConfig, parsedBatchSize)
       await loadModelInfo()
       setModelError(null)
       setModelDialogOpen(false)
@@ -297,6 +303,28 @@ export default function DashboardPage() {
       setModelError(error instanceof Error ? error.message : "Failed to upload model.")
     } finally {
       setModelUploading(false)
+    }
+  }
+
+  const handleModelSettingsSave = async () => {
+    const parsedBatchSize = Number.parseInt(modelBatchSize, 10)
+    if (!selectedInferConfig || !Number.isFinite(parsedBatchSize) || parsedBatchSize < 1 || parsedBatchSize > 256) {
+      setModelError("Batch size must be a number between 1 and 256.")
+      return
+    }
+
+    setModelSettingsSaving(true)
+    try {
+      await updateModelSettings({
+        inferConfig: selectedInferConfig,
+        batchSize: parsedBatchSize,
+      })
+      await loadModelInfo()
+      setModelError(null)
+    } catch (error) {
+      setModelError(error instanceof Error ? error.message : "Failed to save model settings.")
+    } finally {
+      setModelSettingsSaving(false)
     }
   }
 
@@ -345,6 +373,7 @@ export default function DashboardPage() {
 
   const currentModelLabel = modelInfo?.currentModel ?? "No model uploaded yet"
   const currentInferConfigLabel = modelInfo?.inferConfig ?? inferConfigChoices.defaultConfig ?? "Not selected"
+  const currentBatchSizeLabel = typeof modelInfo?.batchSize === "number" ? String(modelInfo.batchSize) : "16"
   const currentModelTimestamp = modelInfo?.uploadedAt ? new Date(modelInfo.uploadedAt).toLocaleString("en-US") : null
   const inferenceReady = Boolean(inferenceStatus?.ready)
   const missingRequiredPath = inferenceStatus?.missingFixedPath
@@ -484,8 +513,8 @@ export default function DashboardPage() {
                 </DialogDescription>
               </DialogHeader>
 
-              <div className="space-y-4 pt-4">
-                <div className="rounded-2xl border border-border bg-secondary p-4">
+              <div className="space-y-3 pt-3">
+                <div className="rounded-2xl border border-border bg-secondary p-3">
                   <div className="flex items-center gap-3">
                     <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary/20">
                       <FileCode className="h-5 w-5 text-primary" />
@@ -494,6 +523,7 @@ export default function DashboardPage() {
                       <p className="text-sm font-medium text-foreground">Current Model</p>
                       <p className="text-xs text-muted-foreground">{modelLoading ? "Loading model..." : currentModelLabel}</p>
                       <p className="mt-1 text-[11px] text-muted-foreground">Config: {currentInferConfigLabel}</p>
+                      <p className="mt-1 text-[11px] text-muted-foreground">Batch size: {currentBatchSizeLabel}</p>
                       {currentModelTimestamp && (
                         <p className="mt-1 text-[11px] text-muted-foreground">Uploaded {currentModelTimestamp}</p>
                       )}
@@ -506,22 +536,17 @@ export default function DashboardPage() {
                   </div>
                 </div>
 
-                <div className="rounded-2xl border border-border bg-secondary p-4">
+                <div className="rounded-2xl border border-border bg-secondary p-3">
                   <p className="text-sm font-medium text-foreground">Inference Requirements</p>
-                  <p className="mt-1 text-xs text-muted-foreground">The backend must satisfy all checks below before video upload processing can start.</p>
+                  <p className="mt-1 text-xs text-muted-foreground">Required before processing starts.</p>
 
-                  <ul className="mt-3 space-y-1 text-xs text-foreground">
+                  <ul className="mt-2 space-y-1 text-xs text-foreground">
                     <li>Model uploaded (.pt/.pth): {inferenceStatus?.modelExists ? "OK" : "Missing"}</li>
                     <li>RT-DETR pipeline files found: {inferenceStatus?.installed ? "OK" : "Missing"}</li>
                     <li>Ready to process videos: {inferenceReady ? "Yes" : "No"}</li>
                   </ul>
 
-                  <div className="mt-3 rounded-xl border border-border/70 bg-background/60 p-3 text-[11px] text-muted-foreground">
-                    <p className="font-medium text-foreground">Required files checklist</p>
-                    <p className="mt-1">1. Config in backend/Occlusion-Robust-RTDETR/configs/rtdetr/</p>
-                    <p>2. Counting config in backend/Occlusion-Robust-RTDETR/inference_requirements/counting/</p>
-                    <p>3. Active model weights (.pt or .pth)</p>
-                  </div>
+                  <p className="mt-2 text-[11px] text-muted-foreground">Needs: infer config, counting config, and model weights.</p>
 
                   {missingRequiredPath && (
                     <p className="mt-3 text-[11px] text-amber-700">
@@ -529,25 +554,38 @@ export default function DashboardPage() {
                     </p>
                   )}
 
-                  <div className="mt-4 space-y-3 rounded-xl border border-border/70 bg-background/60 p-3">
+                  <div className="mt-3 space-y-2 rounded-xl border border-border/70 bg-background/60 p-3">
                     <p className="text-xs font-medium text-foreground">Upload Missing Requirement File</p>
 
-                    <Select value={requirementType} onValueChange={(value) => setRequirementType(value as InferenceRequirementType)}>
-                      <SelectTrigger className="h-9 rounded-xl border-border bg-background text-xs text-foreground">
-                        <SelectValue placeholder="Select requirement type" />
-                      </SelectTrigger>
-                      <SelectContent className="rounded-xl border-border bg-popover">
-                        <SelectItem value="infer-config" className="rounded-lg text-foreground">Infer Config (.yml/.yaml)</SelectItem>
-                        <SelectItem value="annotations" className="rounded-lg text-foreground">Annotations (.json)</SelectItem>
-                      </SelectContent>
-                    </Select>
+                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-[minmax(0,1fr)_140px] sm:items-end">
+                      <Select value={requirementType} onValueChange={(value) => setRequirementType(value as InferenceRequirementType)}>
+                        <SelectTrigger className="h-9 rounded-xl border-border bg-background text-xs text-foreground">
+                          <SelectValue placeholder="Select requirement type" />
+                        </SelectTrigger>
+                        <SelectContent className="rounded-xl border-border bg-popover">
+                          <SelectItem value="infer-config" className="rounded-lg text-foreground">Infer Config (.yml/.yaml)</SelectItem>
+                          <SelectItem value="annotations" className="rounded-lg text-foreground">Annotations (.json)</SelectItem>
+                        </SelectContent>
+                      </Select>
 
-                    <input
-                      type="file"
-                      accept={requirementType === "infer-config" ? ".yml,.yaml" : ".json"}
-                      onChange={(e) => setRequirementFile(e.target.files?.[0] || null)}
-                      className="block w-full text-xs text-muted-foreground file:mr-3 file:rounded-lg file:border-0 file:bg-secondary file:px-3 file:py-2 file:text-xs file:font-medium file:text-foreground hover:file:bg-secondary/80"
-                    />
+                      <div className="space-y-2">
+                        <input
+                          type="file"
+                          accept={requirementType === "infer-config" ? ".yml,.yaml" : ".json"}
+                          onChange={(e) => setRequirementFile(e.target.files?.[0] || null)}
+                          className="hidden"
+                          id="requirement-upload"
+                        />
+                        <label
+                          htmlFor="requirement-upload"
+                          className="flex h-9 cursor-pointer items-center justify-center rounded-xl border border-border bg-background px-3 text-xs font-medium text-foreground transition-colors hover:bg-secondary"
+                        >
+                          Choose File
+                        </label>
+                      </div>
+                    </div>
+
+                    <p className="text-[11px] text-muted-foreground">{requirementFile ? `Selected: ${requirementFile.name}` : "No requirement file selected."}</p>
 
                     <Button
                       onClick={handleRequirementUpload}
@@ -569,27 +607,60 @@ export default function DashboardPage() {
                   </div>
                 </div>
 
-                <div className="space-y-2">
+                <div className="space-y-1.5">
                   <label className="text-sm font-medium text-foreground">Upload New Model</label>
 
-                  <div className="space-y-2">
-                    <label className="text-xs font-medium text-muted-foreground">Inference Config (.yml)</label>
-                    <Select value={selectedInferConfig} onValueChange={setSelectedInferConfig}>
-                      <SelectTrigger className="h-9 rounded-xl border-border bg-background text-xs text-foreground">
-                        <SelectValue placeholder="Select infer config" />
-                      </SelectTrigger>
-                      <SelectContent className="rounded-xl border-border bg-popover">
-                        {inferConfigChoices.options.map((configName) => (
-                          <SelectItem key={configName} value={configName} className="rounded-lg text-foreground">
-                            {configName}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
+                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-[minmax(0,1fr)_140px] sm:items-start">
+                    <div className="space-y-2">
+                      <label className="text-xs font-medium text-muted-foreground">Inference Config (.yml)</label>
+                      <Select value={selectedInferConfig} onValueChange={setSelectedInferConfig}>
+                        <SelectTrigger className="h-9 rounded-xl border-border bg-background text-xs text-foreground">
+                          <SelectValue placeholder="Select infer config" />
+                        </SelectTrigger>
+                        <SelectContent className="rounded-xl border-border bg-popover">
+                          {inferConfigChoices.options.map((configName) => (
+                            <SelectItem key={configName} value={configName} className="rounded-lg text-foreground">
+                              {configName}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+
+                    <div className="space-y-2">
+                      <label className="text-xs font-medium text-muted-foreground">Batch Size</label>
+                      <Input
+                        type="number"
+                        min={1}
+                        max={256}
+                        value={modelBatchSize}
+                        onChange={(event) => {
+                          setModelBatchSize(event.target.value)
+                        }}
+                        className="h-9 rounded-xl border-border bg-background text-xs text-foreground"
+                      />
+                    </div>
+
                   </div>
+                  <p className="text-[11px] text-muted-foreground">Batch Size controls how many frames run together. Higher values use more VRAM.</p>
+                  <Button
+                    onClick={handleModelSettingsSave}
+                    disabled={modelSettingsSaving || !selectedInferConfig || !modelBatchSize}
+                    variant="outline"
+                    className="h-9 w-full rounded-xl border-border text-xs text-foreground hover:bg-secondary"
+                  >
+                    {modelSettingsSaving ? (
+                      <>
+                        <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
+                        Saving Settings...
+                      </>
+                    ) : (
+                      "Save Settings"
+                    )}
+                  </Button>
 
                   <div
-                    className={`rounded-2xl border-2 border-dashed p-6 text-center transition-colors ${
+                    className={`rounded-2xl border-2 border-dashed p-4 text-center transition-colors ${
                       modelFile ? "border-accent bg-accent/10" : "border-border hover:border-muted-foreground"
                     }`}
                   >
@@ -601,7 +672,7 @@ export default function DashboardPage() {
                       id="model-upload"
                     />
                     <label htmlFor="model-upload" className="cursor-pointer">
-                      <Upload className={`mx-auto mb-2 h-8 w-8 ${modelFile ? "text-accent" : "text-muted-foreground"}`} />
+                      <Upload className={`mx-auto mb-1.5 h-6 w-6 ${modelFile ? "text-accent" : "text-muted-foreground"}`} />
                       {modelFile ? (
                         <p className="text-sm font-medium text-accent">{modelFile.name}</p>
                       ) : (
@@ -616,7 +687,7 @@ export default function DashboardPage() {
 
                 <Button
                   onClick={handleModelUpload}
-                  disabled={!modelFile || !selectedInferConfig || modelUploading}
+                  disabled={!modelFile || !selectedInferConfig || !modelBatchSize || modelUploading}
                   className="w-full rounded-2xl bg-primary text-primary-foreground hover:bg-primary/90"
                 >
                   {modelUploading ? (
