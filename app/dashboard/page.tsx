@@ -77,6 +77,25 @@ const getCurrentLocalDate = () => {
   return new Date(now.getTime() - timezoneOffsetMilliseconds).toISOString().slice(0, 10)
 }
 
+const hasFootageForDate = (location: LocationRecord, date: string) =>
+  location.videos.some((video) => video.date === date)
+
+const hasAnyFootage = (location: LocationRecord) => location.videos.length > 0
+
+const pickPreferredLocationId = (locations: LocationRecord[], date: string): string => {
+  const withSelectedDateFootage = locations.find((location) => hasFootageForDate(location, date))
+  if (withSelectedDateFootage) {
+    return withSelectedDateFootage.id
+  }
+
+  const withAnyFootage = locations.find((location) => hasAnyFootage(location))
+  if (withAnyFootage) {
+    return withAnyFootage.id
+  }
+
+  return locations[0]?.id ?? ""
+}
+
 export default function DashboardPage() {
   const { settledUploadsVersion } = useUploadQueue()
   const [selectedDate, setSelectedDate] = useState("")
@@ -103,6 +122,7 @@ export default function DashboardPage() {
   const [synthesis, setSynthesis] = useState<AISynthesisResponse | null>(null)
   const [locations, setLocations] = useState<LocationRecord[]>([])
   const [selectedLocationId, setSelectedLocationId] = useState<string>("")
+  const [userSelectedLocation, setUserSelectedLocation] = useState(false)
   const [footageDates, setFootageDates] = useState<string[]>([])
   const [modelInfo, setModelInfo] = useState<ModelInfo | null>(null)
   const [inferenceStatus, setInferenceStatus] = useState<InferenceStatus | null>(null)
@@ -187,17 +207,26 @@ export default function DashboardPage() {
     try {
       const response = await getLocations()
       setLocations(response)
-      if (!selectedLocationId && response.length > 0) {
-        setSelectedLocationId(response[0].id)
+      if (response.length === 0) {
+        setFootageDates([])
+        setSelectedLocationId("")
+        return
       }
-      if (selectedLocationId && !response.some((location) => location.id === selectedLocationId)) {
-        setSelectedLocationId(response[0]?.id ?? "")
+
+      const preferredLocationId = pickPreferredLocationId(response, selectedDate)
+      const currentSelection = response.find((location) => location.id === selectedLocationId)
+
+      if (!currentSelection) {
+        setSelectedLocationId(preferredLocationId)
+      } else if (!userSelectedLocation && !hasFootageForDate(currentSelection, selectedDate)) {
+        setSelectedLocationId(preferredLocationId)
       }
+
       setFootageDates(Array.from(new Set(response.flatMap((location) => location.videos.map((video) => video.date)))).sort())
     } catch {
       // Leave existing date highlights untouched if this auxiliary request fails.
     }
-  }, [selectedLocationId])
+  }, [selectedDate, selectedLocationId, userSelectedLocation])
 
   useEffect(() => {
     void loadDashboard()
@@ -297,6 +326,7 @@ export default function DashboardPage() {
 
   const handleDateChange = (value: string) => {
     setSelectedDate(value)
+    setUserSelectedLocation(false)
     setFocusTime(undefined)
     setZoomLevel(0)
   }
@@ -314,6 +344,7 @@ export default function DashboardPage() {
   }
 
   const handleLocationChange = (value: string) => {
+    setUserSelectedLocation(true)
     setSelectedLocationId(value)
     setFocusTime(undefined)
     setZoomLevel(0)

@@ -209,46 +209,67 @@ function VideoDetailContent({ params }: { params: Promise<{ id: string }> }) {
           return
         }
 
-        const response = await fetch(timelineUrl, { cache: "no-store" })
-        if (!response.ok) {
-          if (!cancelled) setPortableTimelineRows([])
-          return
-        }
+        const maxAttempts = 4
+        const baseBackoffMs = 250
 
-        const payload = await response.json()
-        if (!Array.isArray(payload)) {
-          if (!cancelled) setPortableTimelineRows([])
-          return
-        }
+        for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+          if (cancelled) return
 
-        const rows = payload
-          .map((row): PortableTimelineRow | null => {
-            const offsetRaw = Number((row as Record<string, unknown>).offsetSeconds)
-            if (!Number.isFinite(offsetRaw)) return null
-
-            const scoreValue = Number((row as Record<string, unknown>).ptsiScore)
-            const detectedNowValue = Number((row as Record<string, unknown>).detectedNow)
-            const visibleNowValue = Number((row as Record<string, unknown>).visiblePedestrians)
-            const totalSoFarValue = Number((row as Record<string, unknown>).totalPedestriansSoFar)
-            const cumulativeValue = Number((row as Record<string, unknown>).cumulativeUniquePedestrians)
-            const score = Number.isFinite(scoreValue) ? scoreValue : null
-
-            return {
-              offsetSeconds: Math.max(0, offsetRaw),
-              severity: ((row as Record<string, unknown>).severity as PortableTimelineRow["severity"]) ?? null,
-              ptsiScore: score,
-              los: normalizeLos((row as Record<string, unknown>).los),
-              detectedNow: Number.isFinite(detectedNowValue) ? detectedNowValue : null,
-              visiblePedestrians: Number.isFinite(visibleNowValue) ? visibleNowValue : null,
-              totalPedestriansSoFar: Number.isFinite(totalSoFarValue) ? totalSoFarValue : null,
-              cumulativeUniquePedestrians: Number.isFinite(cumulativeValue) ? cumulativeValue : null,
+          try {
+            const response = await fetch(timelineUrl, { cache: "no-store" })
+            if (!response.ok) {
+              throw new Error(`Timeline fetch failed with status ${response.status}`)
             }
-          })
-          .filter((row): row is PortableTimelineRow => row !== null)
-          .sort((left, right) => left.offsetSeconds - right.offsetSeconds)
 
-        if (!cancelled) {
-          setPortableTimelineRows(rows)
+            const payload = await response.json()
+            if (!Array.isArray(payload)) {
+              if (!cancelled) setPortableTimelineRows([])
+              return
+            }
+
+            const rows = payload
+              .map((row): PortableTimelineRow | null => {
+                const offsetRaw = Number((row as Record<string, unknown>).offsetSeconds)
+                if (!Number.isFinite(offsetRaw)) return null
+
+                const scoreValue = Number((row as Record<string, unknown>).ptsiScore)
+                const detectedNowValue = Number((row as Record<string, unknown>).detectedNow)
+                const visibleNowValue = Number((row as Record<string, unknown>).visiblePedestrians)
+                const totalSoFarValue = Number((row as Record<string, unknown>).totalPedestriansSoFar)
+                const cumulativeValue = Number((row as Record<string, unknown>).cumulativeUniquePedestrians)
+                const score = Number.isFinite(scoreValue) ? scoreValue : null
+
+                return {
+                  offsetSeconds: Math.max(0, offsetRaw),
+                  severity: ((row as Record<string, unknown>).severity as PortableTimelineRow["severity"]) ?? null,
+                  ptsiScore: score,
+                  los: normalizeLos((row as Record<string, unknown>).los),
+                  detectedNow: Number.isFinite(detectedNowValue) ? detectedNowValue : null,
+                  visiblePedestrians: Number.isFinite(visibleNowValue) ? visibleNowValue : null,
+                  totalPedestriansSoFar: Number.isFinite(totalSoFarValue) ? totalSoFarValue : null,
+                  cumulativeUniquePedestrians: Number.isFinite(cumulativeValue) ? cumulativeValue : null,
+                }
+              })
+              .filter((row): row is PortableTimelineRow => row !== null)
+              .sort((left, right) => left.offsetSeconds - right.offsetSeconds)
+
+            if (!cancelled) {
+              setPortableTimelineRows(rows)
+            }
+            return
+          } catch {
+            if (attempt >= maxAttempts) {
+              if (!cancelled) {
+                setPortableTimelineRows([])
+              }
+              return
+            }
+
+            const backoffMs = baseBackoffMs * attempt
+            await new Promise((resolve) => {
+              setTimeout(resolve, backoffMs)
+            })
+          }
         }
       } catch {
         if (!cancelled) {
@@ -262,7 +283,7 @@ function VideoDetailContent({ params }: { params: Promise<{ id: string }> }) {
     return () => {
       cancelled = true
     }
-  }, [id])
+  }, [id, video?.processedPath])
 
   useEffect(() => {
     const eventId = searchParams.get("eventId") ?? undefined
@@ -475,7 +496,7 @@ function VideoDetailContent({ params }: { params: Promise<{ id: string }> }) {
 
     const worst = sampledLos.reduce<LOSLevel | null>((acc, level) => (losScore(level) > losScore(acc) ? level : acc), null)
     const averageRank = sampledLos.reduce((sum, level) => sum + losScore(level), 0) / sampledLos.length
-    const average = averageRank < 0.5
+    const average: LOSLevel = averageRank < 0.5
       ? "A"
       : averageRank < 1.5
         ? "B"
@@ -964,4 +985,3 @@ export default function VideoDetailPage({ params }: { params: Promise<{ id: stri
     </Suspense>
   )
 }
-

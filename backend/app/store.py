@@ -2036,11 +2036,96 @@ def _event_occlusion_class(event: dict[str, Any]) -> Optional[int]:
     return None
 
 
-def _event_timestamp(event: dict[str, Any], video: dict[str, Any]) -> Optional[datetime]:
-    event_time = _combine_date_and_time(str(video.get("date", "")), event.get("timestamp"))
-    if event_time is not None:
+def _parse_non_negative_offset_seconds(value: Any) -> Optional[float]:
+    try:
+        offset_seconds = float(value)
+    except (TypeError, ValueError):
+        return None
+    return max(0.0, offset_seconds)
+
+
+def _video_end_time(video: dict[str, Any], video_start: Optional[datetime]) -> Optional[datetime]:
+    video_end = _combine_date_and_time(str(video.get("date", "")), video.get("endTime"))
+    if video_end is None:
+        return None
+    if video_start is not None and video_end < video_start:
+        return video_end + timedelta(days=1)
+    return video_end
+
+
+def _is_likely_elapsed_counter_without_video_end(parsed_clock: datetime, event_time: datetime, video_start: datetime) -> bool:
+    """Best-effort guard when endTime metadata is missing or invalid.
+
+    With no known video end, "HH:MM:SS" can be ambiguous between:
+    - wall-clock time (e.g., 08:15:00), and
+    - elapsed counter encoded as clock text (e.g., 00:02:14).
+
+    To avoid false reinterpretation of valid wall-clock values, only treat it as
+    elapsed in this fallback path when the value strongly looks counter-like:
+    - hour is exactly 0 (elapsed counters commonly start at 00:xx:xx), and
+    - the wall-clock interpretation is implausibly far from video start.
+    """
+
+    if parsed_clock.hour != 0:
+        return False
+
+    return abs((event_time - video_start).total_seconds()) >= 6 * 3600
+
+
+def _resolve_video_timestamp(
+    raw_timestamp: Optional[str],
+    video: dict[str, Any],
+    *,
+    explicit_offset_seconds: Optional[float],
+    fallback_to_video_start_on_parse_error: bool = True,
+) -> Optional[datetime]:
+    video_start = _observation_time(video)
+
+    # Prefer explicit offsets when available. They are already relative to video start and
+    # avoid ambiguity between wall-clock times and elapsed counters.
+    if video_start is not None and explicit_offset_seconds is not None:
+        return (video_start + timedelta(seconds=explicit_offset_seconds)).replace(microsecond=0)
+
+    event_time = _combine_date_and_time(str(video.get("date", "")), raw_timestamp)
+    if event_time is None:
+        if fallback_to_video_start_on_parse_error:
+            return video_start
+        return None
+
+    if video_start is None:
         return event_time
-    return _combine_date_and_time(str(video.get("date", "")), video.get("startTime"))
+
+    # Heuristic for detector outputs that emit elapsed counters (e.g. "00:00:04") instead
+    # of wall-clock times. When the parsed wall-clock timestamp is implausibly far from the
+    # video's known start, reinterpret HH:MM:SS as elapsed-from-start.
+    if raw_timestamp and re.fullmatch(r"\d{1,2}:\d{2}:\d{2}", raw_timestamp):
+        parsed_clock = _parse_clock_time(raw_timestamp)
+        if parsed_clock is not None:
+            elapsed_seconds = (parsed_clock.hour * 3600) + (parsed_clock.minute * 60) + parsed_clock.second
+            elapsed_interpretation = (video_start + timedelta(seconds=elapsed_seconds)).replace(microsecond=0)
+
+            # Parse end time when present so we can prefer the interpretation that lands
+            # inside the known video window.
+            video_end = _video_end_time(video, video_start)
+            if video_end is not None:
+                in_window_absolute = video_start <= event_time <= (video_end + timedelta(minutes=1))
+                in_window_elapsed = video_start <= elapsed_interpretation <= (video_end + timedelta(minutes=1))
+                if in_window_elapsed and not in_window_absolute:
+                    return elapsed_interpretation
+
+            # Fallback only when end metadata is unavailable and the value is strongly
+            # counter-like. This keeps valid wall-clock HH:MM:SS values (for example
+            # 08:15:00) from being broadly reinterpreted when endTime is missing/invalid.
+            if _is_likely_elapsed_counter_without_video_end(parsed_clock, event_time, video_start):
+                return elapsed_interpretation
+
+    return event_time
+
+
+def _event_timestamp(event: dict[str, Any], video: dict[str, Any]) -> Optional[datetime]:
+    raw_timestamp = _optional_string(event.get("timestamp"))
+    offset_seconds = _parse_non_negative_offset_seconds(event.get("offsetSeconds"))
+    return _resolve_video_timestamp(raw_timestamp, video, explicit_offset_seconds=offset_seconds)
 
 
 def _observation_time(video: dict[str, Any]) -> Optional[datetime]:
@@ -2089,35 +2174,59 @@ def _tracked_pedestrian_track_key(track: dict[str, Any], video_id: str, fallback
 
 
 def _pedestrian_track_timestamp(track: dict[str, Any], video: dict[str, Any]) -> Optional[datetime]:
-    track_time = _combine_date_and_time(str(video.get("date", "")), track.get("firstTimestamp") or track.get("bestTimestamp"))
-    if track_time is not None:
-        return track_time
+    first_timestamp = _optional_string(track.get("firstTimestamp"))
+    first_offset_seconds = _parse_non_negative_offset_seconds(track.get("firstOffsetSeconds"))
+    if first_timestamp is not None or first_offset_seconds is not None:
+        resolved_first = _resolve_video_timestamp(
+            first_timestamp,
+            video,
+            explicit_offset_seconds=first_offset_seconds,
+            fallback_to_video_start_on_parse_error=False,
+        )
+        if resolved_first is not None:
+            return resolved_first
 
-    observed_at = _observation_time(video)
-    if observed_at is None:
-        return None
+    best_timestamp = _optional_string(track.get("bestTimestamp"))
+    best_offset_seconds = _parse_non_negative_offset_seconds(track.get("bestOffsetSeconds"))
+    if best_timestamp is not None or best_offset_seconds is not None:
+        resolved_best = _resolve_video_timestamp(
+            best_timestamp,
+            video,
+            explicit_offset_seconds=best_offset_seconds,
+            fallback_to_video_start_on_parse_error=False,
+        )
+        if resolved_best is not None:
+            return resolved_best
 
-    try:
-        offset_seconds = float(track.get("firstOffsetSeconds"))
-    except (TypeError, ValueError):
-        return observed_at
-    return observed_at + timedelta(seconds=offset_seconds)
+    return _observation_time(video)
 
 
 def _pedestrian_track_end_timestamp(track: dict[str, Any], video: dict[str, Any]) -> Optional[datetime]:
-    track_time = _combine_date_and_time(str(video.get("date", "")), track.get("lastTimestamp") or track.get("bestTimestamp") or track.get("firstTimestamp"))
-    if track_time is not None:
-        return track_time
+    last_timestamp = _optional_string(track.get("lastTimestamp"))
+    last_offset_seconds = _parse_non_negative_offset_seconds(track.get("lastOffsetSeconds"))
+    if last_timestamp is not None or last_offset_seconds is not None:
+        resolved_last = _resolve_video_timestamp(
+            last_timestamp,
+            video,
+            explicit_offset_seconds=last_offset_seconds,
+            fallback_to_video_start_on_parse_error=False,
+        )
+        if resolved_last is not None:
+            return resolved_last
 
-    observed_at = _observation_time(video)
-    if observed_at is None:
-        return None
+    best_timestamp = _optional_string(track.get("bestTimestamp"))
+    best_offset_seconds = _parse_non_negative_offset_seconds(track.get("bestOffsetSeconds"))
+    if best_timestamp is not None or best_offset_seconds is not None:
+        resolved_best = _resolve_video_timestamp(
+            best_timestamp,
+            video,
+            explicit_offset_seconds=best_offset_seconds,
+            fallback_to_video_start_on_parse_error=False,
+        )
+        if resolved_best is not None:
+            return resolved_best
 
-    try:
-        offset_seconds = float(track.get("lastOffsetSeconds"))
-    except (TypeError, ValueError):
-        return _pedestrian_track_timestamp(track, video)
-    return observed_at + timedelta(seconds=offset_seconds)
+    return _pedestrian_track_timestamp(track, video)
 
 
 def _video_duration_seconds(video: dict[str, Any], pedestrian_tracks: list[dict[str, Any]]) -> int:
@@ -2698,7 +2807,8 @@ def _in_and_out_series_from_first_seen(
     first_seen_by_track: dict[str, tuple[datetime, str]],
     root_window_start: datetime,
     videos_by_id: dict[str, dict[str, Any]],
-) -> list[dict[str, Union[int, str]]]:
+    footage_bucket_indexes: Optional[set[int]] = None,
+) -> list[dict[str, Union[int, str, None]]]:
     if not buckets:
         return []
 
@@ -2742,7 +2852,13 @@ def _in_and_out_series_from_first_seen(
 
     running_in = baseline_counts["In"]
     running_out = baseline_counts["Out"]
+    coverage_end_index = max(footage_bucket_indexes) if footage_bucket_indexes else None
     for index, point in enumerate(series):
+        if coverage_end_index is not None and index > coverage_end_index:
+            point["In"] = None
+            point["Out"] = None
+            continue
+
         running_in += bucket_counts["In"][index]
         running_out += bucket_counts["Out"][index]
         point["In"] = running_in
@@ -2762,16 +2878,17 @@ def _los_series_from_samples(
     bucket_span: timedelta,
     samples: list[dict[str, Any]],
     location: dict[str, Any],
-) -> list[dict[str, Union[float, str]]]:
+    footage_bucket_indexes: Optional[set[int]] = None,
+) -> list[dict[str, Union[float, str, None]]]:
     if not buckets:
         return []
 
     location_name = str(location.get("name") or "")
-    series: list[dict[str, Union[float, str]]] = [
+    series: list[dict[str, Union[float, str, None]]] = [
         {
             "id": bucket_start.isoformat(),
             "time": label,
-            "los": 0.0,
+            "los": None,
         }
         for label, bucket_start in buckets
     ]
@@ -2785,6 +2902,7 @@ def _los_series_from_samples(
     light_totals = [0.0 for _ in series]
     moderate_totals = [0.0 for _ in series]
     heavy_totals = [0.0 for _ in series]
+    coverage_end_index = max(footage_bucket_indexes) if footage_bucket_indexes else None
 
     for sample in samples:
         if str(sample.get("location") or "") != location_name:
@@ -2806,8 +2924,12 @@ def _los_series_from_samples(
         heavy_totals[bucket_index] += float(class_counts.get(2) or 0)
 
     for index, point in enumerate(series):
+        if coverage_end_index is not None and index > coverage_end_index:
+            point["los"] = None
+            continue
+
         if sample_counts[index] == 0:
-            point["los"] = 0.0
+            point["los"] = None
             continue
 
         average_visible = visible_totals[index] / sample_counts[index]
@@ -2824,6 +2946,64 @@ def _los_series_from_samples(
         point["los"] = _los_rank_from_los(los)
 
     return series
+
+
+def _footage_bucket_coverage(
+    videos: list[dict[str, Any]],
+    buckets: list[tuple[str, datetime]],
+    bucket_span: timedelta,
+    location_names: Optional[list[str]] = None,
+) -> tuple[set[int], dict[str, set[int]]]:
+    if not buckets:
+        return set(), {}
+
+    first_bucket = buckets[0][1]
+    bucket_seconds = bucket_span.total_seconds()
+    final_boundary = buckets[-1][1] + bucket_span
+
+    location_coverage = {location: set() for location in (location_names or [])}
+    all_coverage: set[int] = set()
+
+    for video in videos:
+        video_start = _observation_time(video)
+        if video_start is None:
+            continue
+
+        video_end = _video_end_time(video, video_start)
+        if video_end is None:
+            video_end = final_boundary
+        elif video_end <= video_start:
+            video_end = video_start + timedelta(seconds=1)
+
+        if video_end <= first_bucket or video_start >= final_boundary:
+            continue
+
+        start_index = _bucket_index(video_start, first_bucket, bucket_seconds, len(buckets))
+        if start_index is None:
+            start_index = 0 if video_start < first_bucket else len(buckets) - 1
+
+        end_index = _bucket_index(
+            video_end - timedelta(microseconds=1),
+            first_bucket,
+            bucket_seconds,
+            len(buckets),
+        )
+        if end_index is None:
+            end_index = len(buckets) - 1 if video_end >= final_boundary else 0
+
+        if end_index < start_index:
+            continue
+
+        covered_indexes = set(range(start_index, end_index + 1))
+        all_coverage.update(covered_indexes)
+
+        location_name = str(video.get("location") or "")
+        if location_names is not None and location_name not in location_coverage:
+            continue
+
+        location_coverage.setdefault(location_name, set()).update(covered_indexes)
+
+    return all_coverage, location_coverage
 
 
 def _dashboard_unique_pedestrian_rows(first_seen_by_track: dict[str, tuple[datetime, str]]) -> list[dict[str, Any]]:
@@ -2865,9 +3045,11 @@ def _traffic_series_from_samples(
     bucket_span: timedelta,
     samples: list[dict[str, Any]],
     first_seen_by_track: dict[str, tuple[datetime, str]],
-    root_window_start: datetime,
+    _root_window_start: datetime,
     location_names: list[str],
     active_locations_by_name: Optional[dict[str, dict[str, Any]]] = None,
+    footage_bucket_indexes: Optional[set[int]] = None,
+    footage_bucket_indexes_by_location: Optional[dict[str, set[int]]] = None,
 ) -> list[dict[str, Union[float, int, str, None]]]:
     if not buckets:
         return []
@@ -2898,6 +3080,10 @@ def _traffic_series_from_samples(
     location_light_totals = {location: [0.0 for _ in series] for location in location_names}
     location_moderate_totals = {location: [0.0 for _ in series] for location in location_names}
     location_heavy_totals = {location: [0.0 for _ in series] for location in location_names}
+    covered_bucket_indexes = footage_bucket_indexes if footage_bucket_indexes is not None else None
+    covered_bucket_indexes_by_location = (
+        footage_bucket_indexes_by_location if footage_bucket_indexes_by_location is not None else None
+    )
 
     for sample in samples:
         observed_at = sample["observedAt"]
@@ -2923,13 +3109,9 @@ def _traffic_series_from_samples(
 
     baseline_unique_total = 0
     baseline_unique_by_location = {location: 0 for location in location_names}
+    effective_baseline_start = first_bucket
     for observed_at, location in first_seen_by_track.values():
-        if observed_at < root_window_start or observed_at >= final_boundary:
-            continue
-        if observed_at < first_bucket:
-            baseline_unique_total += 1
-            if location in baseline_unique_by_location:
-                baseline_unique_by_location[location] += 1
+        if observed_at < effective_baseline_start or observed_at >= final_boundary:
             continue
         bucket_index = _bucket_index(observed_at, first_bucket, bucket_seconds, len(series))
         if bucket_index is not None:
@@ -2939,12 +3121,34 @@ def _traffic_series_from_samples(
 
     running_total = baseline_unique_total
     running_total_by_location = dict(baseline_unique_by_location)
+    coverage_end_index = max(covered_bucket_indexes) if covered_bucket_indexes else None
     for index, point in enumerate(series):
         running_total += first_seen_counts[index]
-        point["cumulativeUniquePedestrians"] = running_total
-        point["averageVisiblePedestrians"] = round(visible_totals[index] / sample_counts[index], 2) if sample_counts[index] else 0.0
+        bucket_has_footage = (
+            covered_bucket_indexes is None
+            or (coverage_end_index is not None and index <= coverage_end_index)
+        )
+        point["cumulativeUniquePedestrians"] = running_total if bucket_has_footage else None
+        point["averageVisiblePedestrians"] = (
+            round(visible_totals[index] / sample_counts[index], 2)
+            if bucket_has_footage and sample_counts[index]
+            else (0.0 if bucket_has_footage else None)
+        )
         for location in location_names:
             running_total_by_location[location] += first_seen_counts_by_location[location][index]
+
+            location_has_footage = bucket_has_footage
+            if covered_bucket_indexes_by_location is not None:
+                location_coverage_indexes = covered_bucket_indexes_by_location.get(location, set())
+                location_coverage_end_index = max(location_coverage_indexes) if location_coverage_indexes else None
+                location_has_footage = location_coverage_end_index is not None and index <= location_coverage_end_index
+
+            if not location_has_footage:
+                point[location] = None
+                if include_location_los:
+                    point[f"{location}__los"] = None
+                continue
+
             point[location] = running_total_by_location[location]
 
             if not include_location_los:
@@ -3408,6 +3612,15 @@ def dashboard_traffic(
     buckets, bucket_span, bucket_meta = _build_bucket_plan(resolved_date, time_range, observation_times, focus_time, zoom_level, start_time)
     active_location_ids = _active_location_ids(videos)
     active_location_names = [location["name"] for location in state["locations"] if location["id"] in active_location_ids]
+    footage_bucket_indexes: Optional[set[int]] = None
+    footage_bucket_indexes_by_location: Optional[dict[str, set[int]]] = None
+    if time_range != "whole-day":
+        footage_bucket_indexes, footage_bucket_indexes_by_location = _footage_bucket_coverage(
+            videos,
+            buckets,
+            bucket_span,
+            active_location_names,
+        )
     series = _traffic_series_from_samples(
         buckets,
         bucket_span,
@@ -3416,6 +3629,8 @@ def dashboard_traffic(
         root_window_start,
         active_location_names,
         None,
+        footage_bucket_indexes,
+        footage_bucket_indexes_by_location,
     )
 
     if buckets:
@@ -3461,6 +3676,15 @@ def dashboard_traffic_by_location(
         location["name"]: location for location in state["locations"] if location["id"] in active_location_ids
     }
     active_location_names = list(active_locations_by_name.keys())
+    footage_bucket_indexes: Optional[set[int]] = None
+    footage_bucket_indexes_by_location: Optional[dict[str, set[int]]] = None
+    if time_range != "whole-day":
+        footage_bucket_indexes, footage_bucket_indexes_by_location = _footage_bucket_coverage(
+            videos,
+            buckets,
+            bucket_span,
+            active_location_names,
+        )
     series = _traffic_series_from_samples(
         buckets,
         bucket_span,
@@ -3469,6 +3693,8 @@ def dashboard_traffic_by_location(
         root_window_start,
         active_location_names,
         active_locations_by_name,
+        footage_bucket_indexes,
+        footage_bucket_indexes_by_location,
     )
 
     return {
@@ -3498,7 +3724,17 @@ def dashboard_occlusion_trends(
         return {"timeRange": time_range, "series": [], **bucket_meta}
 
     videos_by_id = {str(video.get("id") or ""): video for video in videos}
-    series = _in_and_out_series_from_first_seen(buckets, bucket_span, first_seen_by_track, root_window_start, videos_by_id)
+    footage_bucket_indexes: Optional[set[int]] = None
+    if time_range != "whole-day":
+        footage_bucket_indexes, _footage_bucket_indexes_by_location = _footage_bucket_coverage(videos, buckets, bucket_span)
+    series = _in_and_out_series_from_first_seen(
+        buckets,
+        bucket_span,
+        first_seen_by_track,
+        root_window_start,
+        videos_by_id,
+        footage_bucket_indexes,
+    )
     return {"timeRange": time_range, "series": series, **bucket_meta}
 
 
@@ -3542,7 +3778,23 @@ def dashboard_los(
     if not buckets:
         return {"timeRange": time_range, "series": [], **bucket_meta, "locationTotals": []}
 
-    series = _los_series_from_samples(buckets, bucket_span, samples, location)
+    footage_bucket_indexes: Optional[set[int]] = None
+    if time_range != "whole-day":
+        _footage_bucket_indexes, footage_bucket_indexes_by_location = _footage_bucket_coverage(
+            location_videos,
+            buckets,
+            bucket_span,
+            [str(location.get("name") or "")],
+        )
+        footage_bucket_indexes = footage_bucket_indexes_by_location.get(str(location.get("name") or ""), set())
+
+    series = _los_series_from_samples(
+        buckets,
+        bucket_span,
+        samples,
+        location,
+        footage_bucket_indexes=footage_bucket_indexes,
+    )
     return {
         "timeRange": time_range,
         "series": series,
@@ -3827,12 +4079,32 @@ def ai_synthesis(date: str, time_range: str, start_time: Optional[str] = None) -
     traffic_response = dashboard_traffic(date, time_range, start_time=start_time)
     traffic_series = traffic_response["series"]
     location_totals = traffic_response.get("locationTotals", [])
+
+    def _to_float_or_none(value: Any) -> Optional[float]:
+        if isinstance(value, bool):
+            return None
+        if isinstance(value, (int, float)):
+            return float(value)
+        if isinstance(value, str):
+            stripped_value = value.strip()
+            if not stripped_value:
+                return None
+            try:
+                return float(stripped_value)
+            except ValueError:
+                return None
+        return None
+
     peak_point = None
+    peak_visible_average = 0.0
     if traffic_series:
-        peak_point = max(
-            traffic_series,
-            key=lambda point: float(point.get("averageVisiblePedestrians", 0.0)),
-        )
+        peak_candidates = [
+            (point, parsed_average)
+            for point in traffic_series
+            if (parsed_average := _to_float_or_none(point.get("averageVisiblePedestrians"))) is not None
+        ]
+        if peak_candidates:
+            peak_point, peak_visible_average = max(peak_candidates, key=lambda candidate: candidate[1])
 
     occlusion_response = dashboard_occlusion(date, time_range, start_time)
     hotspots = [location["name"] for location in occlusion_response["locations"] if location["state"] in {"moderate", "severe"}]
@@ -3862,8 +4134,18 @@ def ai_synthesis(date: str, time_range: str, start_time: Optional[str] = None) -
 
     top_location = str(location_totals[0].get("location")) if location_totals else "No location"
     peak_window = str(peak_point.get("time")) if peak_point else "N/A"
-    peak_visible_average = float(peak_point.get("averageVisiblePedestrians", 0.0)) if peak_point else 0.0
-    cumulative_total = int(traffic_series[-1].get("cumulativeUniquePedestrians", 0)) if traffic_series else 0
+    cumulative_values = [
+        int(value)
+        for value in (point.get("cumulativeUniquePedestrians") for point in traffic_series)
+        if value is not None
+    ]
+    cumulative_total = cumulative_values[-1] if cumulative_values else 0
+    peak_events_body = (
+        f"{top_location} contributes the strongest unique footfall in this selection, while the busiest bucket averaged {peak_visible_average:.2f} visible pedestrians around {peak_window}."
+        if peak_point
+        else f"{top_location} contributes the strongest unique footfall in this selection, but the selected timeline has no visible-pedestrian averages yet for peak detection."
+    )
+
     return {
         "date": date,
         "timeRange": time_range,
@@ -3875,7 +4157,7 @@ def ai_synthesis(date: str, time_range: str, start_time: Optional[str] = None) -
             },
             {
                 "title": "Peak Traffic Events",
-                "body": f"{top_location} contributes the strongest unique footfall in this selection, while the busiest bucket averaged {peak_visible_average:.2f} visible pedestrians around {peak_window}.",
+                "body": peak_events_body,
                 "badges": [{"label": "Peak", "value": peak_window, "tone": "orange"}, {"label": "Location", "value": top_location, "tone": "blue"}],
             },
             {

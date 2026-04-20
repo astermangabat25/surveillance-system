@@ -790,7 +790,7 @@ def test_upload_video_runs_inference_and_persists_results(monkeypatch, tmp_path:
         if progress_callback is not None:
             progress_callback({"progressPercent": 60, "message": "Running detection and tracking..."})
         return {
-            "pedestrianCount": 2,
+            "pedestrianCount": 0,
             "processedPath": str(processed_file.relative_to(store.BACKEND_DIR)),
             "events": [
                 {
@@ -2036,7 +2036,7 @@ def test_search_endpoint_expands_descriptive_color_queries_for_ai_ranking(monkey
             "endTime": "10:30",
             "gpsLat": 14.6397,
             "gpsLng": 121.0775,
-            "pedestrianCount": 2,
+            "pedestrianCount": 0,
             "rawPath": None,
             "processedPath": None,
         }
@@ -3504,6 +3504,429 @@ def test_dashboard_traffic_uses_full_track_totals_instead_of_truncated_events(mo
     assert whole_day_bucket["averageVisiblePedestrians"] == 1.0
 
 
+def test_dashboard_traffic_interprets_elapsed_event_timestamps_relative_to_video_start(monkeypatch, tmp_path: Path) -> None:
+    configure_temp_storage(monkeypatch, tmp_path)
+
+    state = store.seed_state()
+    state["videos"] = [
+        {
+            "id": "video-relative-time",
+            "locationId": "gate-2-9",
+            "location": "Gate 2.9",
+            "timestamp": "14:47:44",
+            "date": "2026-03-17",
+            "startTime": "14:47:44",
+            "endTime": "14:48:30",
+            "gpsLat": 14.6397,
+            "gpsLng": 121.0775,
+            "pedestrianCount": 1,
+            "rawPath": None,
+            "processedPath": None,
+        }
+    ]
+    state["events"] = [
+        {
+            "id": "event-relative-time",
+            "type": "detection",
+            "location": "Gate 2.9",
+            "timestamp": "00:00:04",
+            "description": "Pedestrian ID #1 detected at frame 12",
+            "videoId": "video-relative-time",
+            "pedestrianId": 1,
+            "frame": 12,
+            "offsetSeconds": None,
+        }
+    ]
+    state["pedestrianTracks"] = []
+    store.save_state(state)
+
+    with TestClient(main.app) as client:
+        traffic_response = client.get("/api/dashboard/traffic", params={"date": "2026-03-17", "timeRange": "whole-day"})
+
+    assert traffic_response.status_code == 200
+    traffic = traffic_response.json()
+
+    fourteen_bucket = next(point for point in traffic["series"] if point["time"] == "14:00")
+    midnight_bucket = next(point for point in traffic["series"] if point["time"] == "00:00")
+
+    assert fourteen_bucket["cumulativeUniquePedestrians"] == 1
+    assert fourteen_bucket["Gate 2.9"] == 1
+    assert midnight_bucket["cumulativeUniquePedestrians"] == 0
+    assert midnight_bucket["Gate 2.9"] == 0
+
+
+@pytest.mark.parametrize("end_time_value", [None, "not-a-time"])
+def test_dashboard_traffic_preserves_absolute_hhmmss_event_timestamps_when_video_end_is_unusable(
+    monkeypatch,
+    tmp_path: Path,
+    end_time_value: str | None,
+) -> None:
+    configure_temp_storage(monkeypatch, tmp_path)
+
+    state = store.seed_state()
+    state["videos"] = [
+        {
+            "id": "video-ambiguous-time",
+            "locationId": "gate-2-9",
+            "location": "Gate 2.9",
+            "timestamp": "14:47:44",
+            "date": "2026-03-17",
+            "startTime": "14:47:44",
+            "endTime": end_time_value,
+            "gpsLat": 14.6397,
+            "gpsLng": 121.0775,
+            "pedestrianCount": 1,
+            "rawPath": None,
+            "processedPath": None,
+        }
+    ]
+    state["events"] = [
+        {
+            "id": "event-absolute-clock-time",
+            "type": "detection",
+            "location": "Gate 2.9",
+            "timestamp": "08:15:00",
+            "description": "Pedestrian ID #1 detected at frame 12",
+            "videoId": "video-ambiguous-time",
+            "pedestrianId": 1,
+            "frame": 12,
+            "offsetSeconds": None,
+        }
+    ]
+    state["pedestrianTracks"] = []
+    store.save_state(state)
+
+    with TestClient(main.app) as client:
+        response = client.get("/api/dashboard/traffic", params={"date": "2026-03-17", "timeRange": "whole-day"})
+
+    assert response.status_code == 200
+    payload = response.json()
+
+    eight_bucket = next(point for point in payload["series"] if point["time"] == "08:00")
+    twenty_three_bucket = next(point for point in payload["series"] if point["time"] == "23:00")
+
+    assert eight_bucket["cumulativeUniquePedestrians"] == 1
+    assert eight_bucket["Gate 2.9"] == 1
+    assert twenty_three_bucket["cumulativeUniquePedestrians"] == 1
+    assert twenty_three_bucket["Gate 2.9"] == 1
+
+
+def test_dashboard_traffic_interprets_elapsed_track_timestamps_relative_to_video_start(monkeypatch, tmp_path: Path) -> None:
+    configure_temp_storage(monkeypatch, tmp_path)
+
+    state = store.seed_state()
+    state["videos"] = [
+        {
+            "id": "video-relative-track-time",
+            "locationId": "gate-2-9",
+            "location": "Gate 2.9",
+            "timestamp": "14:47:44",
+            "date": "2026-03-17",
+            "startTime": "14:47:44",
+            "endTime": "14:58:30",
+            "gpsLat": 14.6397,
+            "gpsLng": 121.0775,
+            "pedestrianCount": 0,
+            "rawPath": None,
+            "processedPath": None,
+        }
+    ]
+    state["events"] = [
+        {
+            "id": "event-relative-track-time-1",
+            "type": "detection",
+            "location": "Gate 2.9",
+            "timestamp": "14:47:48",
+            "description": "Pedestrian ID #1 detected at frame 12",
+            "videoId": "video-relative-track-time",
+            "pedestrianId": 1,
+            "frame": 12,
+            "offsetSeconds": 4.0,
+        }
+    ]
+    state["pedestrianTracks"] = [
+        {
+            "id": "track-relative-time-1",
+            "videoId": "video-relative-track-time",
+            "pedestrianId": 1,
+            "location": "Gate 2.9",
+            "firstTimestamp": "00:00:04",
+            "bestTimestamp": "00:00:04",
+            "firstOffsetSeconds": 4.0,
+            "bestOffsetSeconds": 4.0,
+        },
+        {
+            "id": "track-relative-time-2",
+            "videoId": "video-relative-track-time",
+            "pedestrianId": 2,
+            "location": "Gate 2.9",
+            "firstTimestamp": "00:10:00",
+            "bestTimestamp": "00:10:00",
+            "firstOffsetSeconds": None,
+            "bestOffsetSeconds": None,
+        },
+    ]
+    store.save_state(state)
+
+    with TestClient(main.app) as client:
+        response = client.get(
+            "/api/dashboard/traffic",
+            params={"date": "2026-03-17", "timeRange": "12h", "startTime": "12:00"},
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+
+    noon_bucket = next(point for point in payload["series"] if point["time"] == "12:00")
+    fourteen_bucket = next(point for point in payload["series"] if point["time"] == "14:00")
+
+    assert noon_bucket["cumulativeUniquePedestrians"] == 0
+    assert noon_bucket["Gate 2.9"] == 0
+    assert fourteen_bucket["cumulativeUniquePedestrians"] == 2
+    assert fourteen_bucket["Gate 2.9"] == 2
+
+
+def test_track_timestamp_falls_back_from_malformed_first_to_valid_best(monkeypatch, tmp_path: Path) -> None:
+    configure_temp_storage(monkeypatch, tmp_path)
+
+    video = {
+        "id": "video-malformed-first",
+        "locationId": "gate-2-9",
+        "location": "Gate 2.9",
+        "timestamp": "14:47:44",
+        "date": "2026-03-17",
+        "startTime": "14:47:44",
+        "endTime": "18:30:00",
+        "gpsLat": 14.6397,
+        "gpsLng": 121.0775,
+        "pedestrianCount": 0,
+        "rawPath": None,
+        "processedPath": None,
+    }
+    track = {
+        "id": "track-malformed-first",
+        "videoId": "video-malformed-first",
+        "pedestrianId": 1,
+        "location": "Gate 2.9",
+        "firstTimestamp": "not-a-timestamp",
+        "bestTimestamp": "18:05:00",
+        "firstOffsetSeconds": None,
+        "bestOffsetSeconds": None,
+    }
+
+    resolved = store._pedestrian_track_timestamp(track, video)
+
+    assert resolved is not None
+    assert resolved.hour == 18
+    assert resolved.minute == 5
+
+
+def test_dashboard_traffic_hides_cumulative_series_after_short_video_footage_window(monkeypatch, tmp_path: Path) -> None:
+    configure_temp_storage(monkeypatch, tmp_path)
+
+    state = store.seed_state()
+    state["videos"] = [
+        {
+            "id": "video-short-traffic",
+            "locationId": "gate-2-9",
+            "location": "Gate 2.9",
+            "timestamp": "10:00:00",
+            "date": "2026-03-17",
+            "startTime": "10:00:00",
+            "endTime": "10:01:00",
+            "gpsLat": 14.6397,
+            "gpsLng": 121.0775,
+            "pedestrianCount": 1,
+            "rawPath": None,
+            "processedPath": None,
+        }
+    ]
+    state["events"] = [
+        {
+            "id": "event-short-traffic",
+            "type": "detection",
+            "location": "Gate 2.9",
+            "timestamp": "10:00:30",
+            "description": "Pedestrian ID #1 detected at frame 1",
+            "videoId": "video-short-traffic",
+            "pedestrianId": 1,
+            "frame": 1,
+            "offsetSeconds": 30.0,
+            "occlusionClass": 1,
+        }
+    ]
+    state["pedestrianTracks"] = []
+    store.save_state(state)
+
+    with TestClient(main.app) as client:
+        response = client.get(
+            "/api/dashboard/traffic",
+            params={"date": "2026-03-17", "timeRange": "12h", "startTime": "10:00"},
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+
+    ten_bucket = next(point for point in payload["series"] if point["time"] == "10:00")
+    twelve_bucket = next(point for point in payload["series"] if point["time"] == "12:00")
+
+    assert ten_bucket["cumulativeUniquePedestrians"] == 1
+    assert ten_bucket["Gate 2.9"] == 1
+    assert isinstance(ten_bucket["averageVisiblePedestrians"], float)
+
+    assert twelve_bucket["cumulativeUniquePedestrians"] is None
+    assert twelve_bucket["Gate 2.9"] is None
+    assert twelve_bucket["averageVisiblePedestrians"] is None
+
+
+def test_dashboard_traffic_keeps_leading_uncovered_buckets_connected_and_stops_after_trailing_coverage(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    configure_temp_storage(monkeypatch, tmp_path)
+
+    state = store.seed_state()
+    state["videos"] = [
+        {
+            "id": "video-leading-covered",
+            "locationId": "gate-2-9",
+            "location": "Gate 2.9",
+            "timestamp": "10:00",
+            "date": "2026-03-17",
+            "startTime": "10:00",
+            "endTime": "10:10",
+            "gpsLat": 14.6397,
+            "gpsLng": 121.0775,
+            "pedestrianCount": 1,
+            "rawPath": None,
+            "processedPath": None,
+        }
+    ]
+    state["events"] = [
+        {
+            "id": "event-leading-covered",
+            "type": "detection",
+            "location": "Gate 2.9",
+            "timestamp": "10:01:00",
+            "description": "Pedestrian ID #1 detected at frame 1",
+            "videoId": "video-leading-covered",
+            "pedestrianId": 1,
+            "frame": 1,
+            "offsetSeconds": 1.0,
+        }
+    ]
+    store.save_state(state)
+
+    with TestClient(main.app) as client:
+        response = client.get(
+            "/api/dashboard/traffic",
+            params={"date": "2026-03-17", "timeRange": "6h", "startTime": "09:00"},
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+
+    nine_bucket = next(point for point in payload["series"] if point["time"] == "09:00")
+    ten_bucket = next(point for point in payload["series"] if point["time"] == "10:00")
+    twelve_bucket = next(point for point in payload["series"] if point["time"] == "12:00")
+
+    assert nine_bucket["cumulativeUniquePedestrians"] == 0
+    assert nine_bucket["Gate 2.9"] == 0
+    assert nine_bucket["averageVisiblePedestrians"] == 0.0
+
+    assert ten_bucket["cumulativeUniquePedestrians"] == 1
+    assert ten_bucket["Gate 2.9"] == 1
+    assert isinstance(ten_bucket["averageVisiblePedestrians"], float)
+
+    assert twelve_bucket["cumulativeUniquePedestrians"] is None
+    assert twelve_bucket["Gate 2.9"] is None
+    assert twelve_bucket["averageVisiblePedestrians"] is None
+
+
+def test_dashboard_traffic_keeps_gaps_between_clips_connected(monkeypatch, tmp_path: Path) -> None:
+    configure_temp_storage(monkeypatch, tmp_path)
+
+    state = store.seed_state()
+    state["videos"] = [
+        {
+            "id": "video-gap-1",
+            "locationId": "gate-2-9",
+            "location": "Gate 2.9",
+            "timestamp": "10:00",
+            "date": "2026-03-17",
+            "startTime": "10:00",
+            "endTime": "10:10",
+            "gpsLat": 14.6397,
+            "gpsLng": 121.0775,
+            "pedestrianCount": 1,
+            "rawPath": None,
+            "processedPath": None,
+        },
+        {
+            "id": "video-gap-2",
+            "locationId": "gate-2-9",
+            "location": "Gate 2.9",
+            "timestamp": "12:00",
+            "date": "2026-03-17",
+            "startTime": "12:00",
+            "endTime": "12:10",
+            "gpsLat": 14.6397,
+            "gpsLng": 121.0775,
+            "pedestrianCount": 1,
+            "rawPath": None,
+            "processedPath": None,
+        },
+    ]
+    state["events"] = [
+        {
+            "id": "event-gap-1",
+            "type": "detection",
+            "location": "Gate 2.9",
+            "timestamp": "10:01:00",
+            "description": "Pedestrian ID #1 detected at frame 1",
+            "videoId": "video-gap-1",
+            "pedestrianId": 1,
+            "frame": 1,
+            "offsetSeconds": 1.0,
+        },
+        {
+            "id": "event-gap-2",
+            "type": "detection",
+            "location": "Gate 2.9",
+            "timestamp": "12:01:00",
+            "description": "Pedestrian ID #2 detected at frame 2",
+            "videoId": "video-gap-2",
+            "pedestrianId": 2,
+            "frame": 2,
+            "offsetSeconds": 1.0,
+        },
+    ]
+    store.save_state(state)
+
+    with TestClient(main.app) as client:
+        response = client.get(
+            "/api/dashboard/traffic",
+            params={"date": "2026-03-17", "timeRange": "6h", "startTime": "10:00"},
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+
+    ten_bucket = next(point for point in payload["series"] if point["time"] == "10:00")
+    eleven_bucket = next(point for point in payload["series"] if point["time"] == "11:00")
+    twelve_bucket = next(point for point in payload["series"] if point["time"] == "12:00")
+
+    assert ten_bucket["cumulativeUniquePedestrians"] == 1
+    assert ten_bucket["Gate 2.9"] == 1
+
+    assert eleven_bucket["cumulativeUniquePedestrians"] == 1
+    assert eleven_bucket["Gate 2.9"] == 1
+    assert eleven_bucket["averageVisiblePedestrians"] == 0.0
+
+    assert twelve_bucket["cumulativeUniquePedestrians"] == 2
+    assert twelve_bucket["Gate 2.9"] == 2
+
+
 def test_dashboard_traffic_returns_per_location_cumulative_series(monkeypatch, tmp_path: Path) -> None:
     configure_temp_storage(monkeypatch, tmp_path)
 
@@ -3609,6 +4032,81 @@ def test_dashboard_traffic_returns_per_location_cumulative_series(monkeypatch, t
     assert ten_fifteen_bucket["Gate 3"] == 1
 
 
+def test_dashboard_traffic_drilldown_baseline_resets_to_window_start(monkeypatch, tmp_path: Path) -> None:
+    configure_temp_storage(monkeypatch, tmp_path)
+
+    state = store.seed_state()
+    state["videos"] = [
+        {
+            "id": "video-drilldown-baseline",
+            "locationId": "gate-2-9",
+            "location": "Gate 2.9",
+            "timestamp": "09:50",
+            "date": "2026-03-17",
+            "startTime": "09:50",
+            "endTime": "10:30",
+            "gpsLat": 14.6397,
+            "gpsLng": 121.0775,
+            "pedestrianCount": 2,
+            "rawPath": None,
+            "processedPath": None,
+        }
+    ]
+    state["events"] = [
+        {
+            "id": "event-drilldown-baseline-early",
+            "type": "detection",
+            "location": "Gate 2.9",
+            "timestamp": "09:55:00",
+            "description": "Pedestrian ID #1 detected at frame 1",
+            "videoId": "video-drilldown-baseline",
+            "pedestrianId": 1,
+            "frame": 1,
+            "offsetSeconds": 300.0,
+        },
+        {
+            "id": "event-drilldown-baseline-window",
+            "type": "detection",
+            "location": "Gate 2.9",
+            "timestamp": "10:20:00",
+            "description": "Pedestrian ID #2 detected at frame 2",
+            "videoId": "video-drilldown-baseline",
+            "pedestrianId": 2,
+            "frame": 2,
+            "offsetSeconds": 1800.0,
+        },
+    ]
+    state["pedestrianTracks"] = []
+    store.save_state(state)
+
+    with TestClient(main.app) as client:
+        response = client.get(
+            "/api/dashboard/traffic",
+            params={
+                "date": "2026-03-17",
+                "timeRange": "whole-day",
+                "focusTime": "10:00",
+                "zoomLevel": 1,
+            },
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+
+    ten_bucket = next(point for point in payload["series"] if point["time"] == "10:00")
+    ten_fifteen_bucket = next(point for point in payload["series"] if point["time"] == "10:15")
+    ten_thirty_bucket = next(point for point in payload["series"] if point["time"] == "10:30")
+
+    assert ten_bucket["cumulativeUniquePedestrians"] == 0
+    assert ten_bucket["Gate 2.9"] == 0
+
+    assert ten_fifteen_bucket["cumulativeUniquePedestrians"] == 1
+    assert ten_fifteen_bucket["Gate 2.9"] == 1
+
+    assert ten_thirty_bucket["cumulativeUniquePedestrians"] == 1
+    assert ten_thirty_bucket["Gate 2.9"] == 1
+
+
 def test_dashboard_traffic_by_location_returns_gate_overlays_and_window_metadata(monkeypatch, tmp_path: Path) -> None:
     configure_temp_storage(monkeypatch, tmp_path)
 
@@ -3702,6 +4200,171 @@ def test_dashboard_traffic_by_location_returns_gate_overlays_and_window_metadata
     assert ten_oclock_bucket["Gate 2.9__los"] in {"A", "B", "C", "D", "E", "F", None}
     assert ten_oclock_bucket["Gate 3__los"] in {"A", "B", "C", "D", "E", "F", None}
     assert "cumulativeUniquePedestrians" in ten_oclock_bucket
+
+
+def test_dashboard_traffic_by_location_marks_location_without_window_coverage_as_null(monkeypatch, tmp_path: Path) -> None:
+    configure_temp_storage(monkeypatch, tmp_path)
+
+    state = store.seed_state()
+    state["videos"] = [
+        {
+            "id": "video-window-covered",
+            "locationId": "gate-2-9",
+            "location": "Gate 2.9",
+            "timestamp": "10:00",
+            "date": "2026-03-17",
+            "startTime": "10:00",
+            "endTime": "10:10",
+            "gpsLat": 14.6397,
+            "gpsLng": 121.0775,
+            "pedestrianCount": 1,
+            "rawPath": None,
+            "processedPath": None,
+        },
+        {
+            "id": "video-outside-window",
+            "locationId": "gate-3",
+            "location": "Gate 3",
+            "timestamp": "08:00",
+            "date": "2026-03-17",
+            "startTime": "08:00",
+            "endTime": "08:10",
+            "gpsLat": 14.6390,
+            "gpsLng": 121.0781,
+            "pedestrianCount": 1,
+            "rawPath": None,
+            "processedPath": None,
+        },
+    ]
+    state["events"] = [
+        {
+            "id": "event-window-covered",
+            "type": "detection",
+            "location": "Gate 2.9",
+            "timestamp": "10:01:00",
+            "description": "Pedestrian ID #1 detected at frame 10",
+            "videoId": "video-window-covered",
+            "pedestrianId": 1,
+            "frame": 10,
+            "offsetSeconds": 1.0,
+        },
+        {
+            "id": "event-outside-window",
+            "type": "detection",
+            "location": "Gate 3",
+            "timestamp": "08:01:00",
+            "description": "Pedestrian ID #1 detected at frame 12",
+            "videoId": "video-outside-window",
+            "pedestrianId": 1,
+            "frame": 12,
+            "offsetSeconds": 1.0,
+        },
+    ]
+    store.save_state(state)
+
+    with TestClient(main.app) as client:
+        response = client.get(
+            "/api/dashboard/traffic-by-location",
+            params={"date": "2026-03-17", "timeRange": "6h", "startTime": "10:00"},
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+
+    ten_bucket = next(point for point in payload["series"] if point["time"] == "10:00")
+    twelve_bucket = next(point for point in payload["series"] if point["time"] == "12:00")
+
+    assert ten_bucket["Gate 2.9"] == 1
+    assert ten_bucket["Gate 3"] is None
+    assert ten_bucket["Gate 3__los"] is None
+
+    assert twelve_bucket["Gate 2.9"] is None
+    assert twelve_bucket["Gate 3"] is None
+    assert twelve_bucket["Gate 3__los"] is None
+
+
+def test_dashboard_traffic_by_location_keeps_leading_location_buckets_connected_until_its_coverage(monkeypatch, tmp_path: Path) -> None:
+    configure_temp_storage(monkeypatch, tmp_path)
+
+    state = store.seed_state()
+    state["videos"] = [
+        {
+            "id": "video-leading-location-a",
+            "locationId": "gate-2-9",
+            "location": "Gate 2.9",
+            "timestamp": "10:00",
+            "date": "2026-03-17",
+            "startTime": "10:00",
+            "endTime": "10:10",
+            "gpsLat": 14.6397,
+            "gpsLng": 121.0775,
+            "pedestrianCount": 1,
+            "rawPath": None,
+            "processedPath": None,
+        },
+        {
+            "id": "video-leading-location-b",
+            "locationId": "gate-3",
+            "location": "Gate 3",
+            "timestamp": "12:00",
+            "date": "2026-03-17",
+            "startTime": "12:00",
+            "endTime": "12:10",
+            "gpsLat": 14.6390,
+            "gpsLng": 121.0781,
+            "pedestrianCount": 1,
+            "rawPath": None,
+            "processedPath": None,
+        },
+    ]
+    state["events"] = [
+        {
+            "id": "event-leading-location-a",
+            "type": "detection",
+            "location": "Gate 2.9",
+            "timestamp": "10:01:00",
+            "description": "Pedestrian ID #1 detected at frame 1",
+            "videoId": "video-leading-location-a",
+            "pedestrianId": 1,
+            "frame": 1,
+            "offsetSeconds": 1.0,
+        },
+        {
+            "id": "event-leading-location-b",
+            "type": "detection",
+            "location": "Gate 3",
+            "timestamp": "12:01:00",
+            "description": "Pedestrian ID #1 detected at frame 1",
+            "videoId": "video-leading-location-b",
+            "pedestrianId": 1,
+            "frame": 1,
+            "offsetSeconds": 1.0,
+        },
+    ]
+    store.save_state(state)
+
+    with TestClient(main.app) as client:
+        response = client.get(
+            "/api/dashboard/traffic-by-location",
+            params={"date": "2026-03-17", "timeRange": "6h", "startTime": "10:00"},
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+
+    ten_bucket = next(point for point in payload["series"] if point["time"] == "10:00")
+    eleven_bucket = next(point for point in payload["series"] if point["time"] == "11:00")
+    twelve_bucket = next(point for point in payload["series"] if point["time"] == "12:00")
+
+    assert ten_bucket["Gate 2.9"] == 1
+    assert ten_bucket["Gate 3"] == 0
+    assert ten_bucket["Gate 3__los"] is None
+
+    assert eleven_bucket["Gate 3"] == 0
+    assert eleven_bucket["Gate 3__los"] is None
+
+    assert twelve_bucket["Gate 2.9"] is None
+    assert twelve_bucket["Gate 3"] == 1
 
 
 def test_dashboard_los_without_location_id_returns_empty_payload(monkeypatch, tmp_path: Path) -> None:
@@ -3845,6 +4508,65 @@ def test_dashboard_los_with_valid_location_filters_and_returns_time_metadata(mon
     assert drilldown_payload["windowEnd"] == "11:00"
 
 
+def test_dashboard_los_returns_no_data_after_short_video_footage_window(monkeypatch, tmp_path: Path) -> None:
+    configure_temp_storage(monkeypatch, tmp_path)
+
+    state = store.seed_state()
+    state["videos"] = [
+        {
+            "id": "video-short-los",
+            "locationId": "gate-2-9",
+            "location": "Gate 2.9",
+            "timestamp": "10:00:00",
+            "date": "2026-03-17",
+            "startTime": "10:00:00",
+            "endTime": "10:01:00",
+            "gpsLat": 14.6397,
+            "gpsLng": 121.0775,
+            "pedestrianCount": 1,
+            "rawPath": None,
+            "processedPath": None,
+        }
+    ]
+    state["events"] = [
+        {
+            "id": "event-short-los",
+            "type": "detection",
+            "location": "Gate 2.9",
+            "timestamp": "10:00:20",
+            "description": "Pedestrian ID #1 detected at frame 1",
+            "videoId": "video-short-los",
+            "pedestrianId": 1,
+            "frame": 1,
+            "offsetSeconds": 20.0,
+            "occlusionClass": 2,
+        }
+    ]
+    state["pedestrianTracks"] = []
+    store.save_state(state)
+
+    with TestClient(main.app) as client:
+        response = client.get(
+            "/api/dashboard/los",
+            params={
+                "date": "2026-03-17",
+                "timeRange": "12h",
+                "startTime": "10:00",
+                "locationId": "gate-2-9",
+            },
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+
+    ten_bucket = next(point for point in payload["series"] if point["time"] == "10:00")
+    twelve_bucket = next(point for point in payload["series"] if point["time"] == "12:00")
+
+    assert isinstance(ten_bucket["los"], float)
+    assert 1.0 <= float(ten_bucket["los"]) <= 6.0
+    assert twelve_bucket["los"] is None
+
+
 def test_dashboard_occlusion_trends_groups_in_out_by_location_id_not_name(monkeypatch, tmp_path: Path) -> None:
     configure_temp_storage(monkeypatch, tmp_path)
 
@@ -3919,6 +4641,60 @@ def test_dashboard_occlusion_trends_groups_in_out_by_location_id_not_name(monkey
     bucket = next(point for point in payload["series"] if point["time"] == "10:00")
     assert bucket["In"] == 1
     assert bucket["Out"] == 1
+
+
+def test_dashboard_occlusion_trends_hides_in_out_after_short_video_footage_window(monkeypatch, tmp_path: Path) -> None:
+    configure_temp_storage(monkeypatch, tmp_path)
+
+    state = store.seed_state()
+    state["videos"] = [
+        {
+            "id": "video-short-in-out",
+            "locationId": "gate-2",
+            "location": "Gate 2",
+            "timestamp": "10:00:00",
+            "date": "2026-03-17",
+            "startTime": "10:00:00",
+            "endTime": "10:01:00",
+            "gpsLat": 14.6358,
+            "gpsLng": 121.07469,
+            "pedestrianCount": 1,
+            "rawPath": None,
+            "processedPath": None,
+        }
+    ]
+    state["events"] = [
+        {
+            "id": "event-short-in-out",
+            "type": "detection",
+            "location": "Gate 2",
+            "timestamp": "10:00:20",
+            "description": "Pedestrian ID #1 detected at frame 1",
+            "videoId": "video-short-in-out",
+            "pedestrianId": 1,
+            "frame": 1,
+            "offsetSeconds": 20.0,
+        }
+    ]
+    state["pedestrianTracks"] = []
+    store.save_state(state)
+
+    with TestClient(main.app) as client:
+        response = client.get(
+            "/api/dashboard/occlusion-trends",
+            params={"date": "2026-03-17", "timeRange": "12h", "startTime": "10:00"},
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+
+    ten_bucket = next(point for point in payload["series"] if point["time"] == "10:00")
+    twelve_bucket = next(point for point in payload["series"] if point["time"] == "12:00")
+
+    assert ten_bucket["In"] == 1
+    assert ten_bucket["Out"] == 0
+    assert twelve_bucket["In"] is None
+    assert twelve_bucket["Out"] is None
 
 
 def test_dashboard_time_window_uses_start_time_and_generates_six_buckets(monkeypatch, tmp_path: Path) -> None:
@@ -4103,6 +4879,93 @@ def test_ai_synthesis_respects_start_time_window(monkeypatch, tmp_path: Path) ->
     assert any(badge["label"] == "Peak" and badge["value"] == "20:00" for badge in afternoon_payload["sections"][1]["badges"])
     assert "tracked 1 unique pedestrians" in morning_payload["sections"][0]["body"]
     assert "tracked 1 unique pedestrians" in afternoon_payload["sections"][0]["body"]
+
+
+def test_ai_synthesis_handles_null_post_footage_buckets(monkeypatch, tmp_path: Path) -> None:
+    configure_temp_storage(monkeypatch, tmp_path)
+
+    state = store.seed_state()
+    state["videos"] = [
+        {
+            "id": "video-ai-null-post-footage",
+            "locationId": "gate-2-9",
+            "location": "Gate 2.9",
+            "timestamp": "10:00:00",
+            "date": "2026-03-17",
+            "startTime": "10:00:00",
+            "endTime": "10:01:00",
+            "gpsLat": 14.6397,
+            "gpsLng": 121.0775,
+            "pedestrianCount": 1,
+            "rawPath": None,
+            "processedPath": None,
+        }
+    ]
+    state["events"] = [
+        {
+            "id": "event-ai-null-post-footage",
+            "type": "detection",
+            "location": "Gate 2.9",
+            "timestamp": "10:00:30",
+            "description": "Pedestrian ID #1 detected at frame 1",
+            "videoId": "video-ai-null-post-footage",
+            "pedestrianId": 1,
+            "frame": 1,
+            "offsetSeconds": 30.0,
+            "occlusionClass": 1,
+        }
+    ]
+    state["pedestrianTracks"] = []
+    store.save_state(state)
+
+    with TestClient(main.app) as client:
+        response = client.get(
+            "/api/dashboard/ai-synthesis",
+            params={"date": "2026-03-17", "timeRange": "12h", "startTime": "10:00"},
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert isinstance(payload.get("sections"), list)
+    assert len(payload["sections"]) == 3
+    assert "busiest bucket averaged" in payload["sections"][1]["body"]
+    assert any(badge["label"] == "Peak" and badge["value"] == "10:00" for badge in payload["sections"][1]["badges"])
+
+
+def test_ai_synthesis_keeps_meaningful_peak_section_when_all_bucket_averages_are_null(monkeypatch, tmp_path: Path) -> None:
+    configure_temp_storage(monkeypatch, tmp_path)
+
+    monkeypatch.setattr(
+        store,
+        "dashboard_traffic",
+        lambda date, time_range, start_time=None: {
+            "timeRange": time_range,
+            "series": [
+                {"time": "10:00", "averageVisiblePedestrians": None, "cumulativeUniquePedestrians": None},
+                {"time": "12:00", "averageVisiblePedestrians": None, "cumulativeUniquePedestrians": None},
+                {"time": "14:00", "averageVisiblePedestrians": None, "cumulativeUniquePedestrians": None},
+            ],
+            "locationTotals": [{"location": "Gate 2.9", "totalPedestrians": 0}],
+        },
+    )
+    monkeypatch.setattr(
+        store,
+        "dashboard_occlusion",
+        lambda date, time_range, start_time=None: {"locations": []},
+    )
+
+    with TestClient(main.app) as client:
+        response = client.get(
+            "/api/dashboard/ai-synthesis",
+            params={"date": "2026-03-17", "timeRange": "12h", "startTime": "10:00"},
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert isinstance(payload.get("sections"), list)
+    assert len(payload["sections"]) == 3
+    assert "no visible-pedestrian averages yet for peak detection" in payload["sections"][1]["body"]
+    assert any(badge["label"] == "Peak" and badge["value"] == "N/A" for badge in payload["sections"][1]["badges"])
 
 
 def test_dashboard_export_respects_start_time_window(monkeypatch, tmp_path: Path) -> None:

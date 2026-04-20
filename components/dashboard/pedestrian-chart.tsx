@@ -75,6 +75,19 @@ type LineDotProps = {
   cx?: number
   cy?: number
   payload?: TrafficPoint
+  index?: number
+}
+
+function lineDotKey(seriesKey: string, variant: "dot" | "activeDot", props: LineDotProps): string {
+  const payloadId = props.payload?.id
+  const pointId = typeof payloadId === "string" || typeof payloadId === "number" ? String(payloadId) : null
+  const pointTime = typeof props.payload?.time === "string" ? props.payload.time : null
+  const pointIndex = Number.isFinite(props.index) ? String(props.index) : null
+  const cx = Number.isFinite(props.cx) ? String(props.cx) : "na"
+  const cy = Number.isFinite(props.cy) ? String(props.cy) : "na"
+  const pointIdentity = pointId ?? pointTime ?? pointIndex ?? `${cx}:${cy}`
+
+  return `${seriesKey}:${variant}:${pointIdentity}`
 }
 
 function formatTimeRangeLabel(timeRange: string) {
@@ -206,6 +219,11 @@ export function PedestrianChart({
 
   const showLocationBreakdown = metricKey === "cumulativeUniquePedestrians" && locationSeries.length > 0
   const isLosMetric = metricKey === "los"
+  const nonNullMetricPointCount = data.reduce((count, point) => {
+    const value = point[metricKey]
+    return typeof value === "number" && Number.isFinite(value) ? count + 1 : count
+  }, 0)
+  const shouldShowMetricDots = isLosMetric || nonNullMetricPointCount <= 1
   const chartTypeSelectionEnabled = typeof onChartTypeChange === "function" && typeof chartType === "string"
 
   const totals = locationTotals.map((item, index) => ({
@@ -346,12 +364,30 @@ export function PedestrianChart({
                       dot={(props: LineDotProps) => {
                         const losValue = props?.payload?.[`${series.key}__los`]
                         const pointColor = typeof losValue === "string" ? (LOS_COLOR_MAP[losValue] ?? series.color) : series.color
-                        return <circle cx={props.cx} cy={props.cy} r={3} fill={pointColor} stroke={pointColor} />
+                        return (
+                          <circle
+                            key={lineDotKey(series.key, "dot", props)}
+                            cx={props.cx}
+                            cy={props.cy}
+                            r={3}
+                            fill={pointColor}
+                            stroke={pointColor}
+                          />
+                        )
                       }}
                       activeDot={(props: LineDotProps) => {
                         const losValue = props?.payload?.[`${series.key}__los`]
                         const pointColor = typeof losValue === "string" ? (LOS_COLOR_MAP[losValue] ?? series.color) : series.color
-                        return <circle cx={props.cx} cy={props.cy} r={4} fill={pointColor} stroke={pointColor} />
+                        return (
+                          <circle
+                            key={lineDotKey(series.key, "activeDot", props)}
+                            cx={props.cx}
+                            cy={props.cy}
+                            r={4}
+                            fill={pointColor}
+                            stroke={pointColor}
+                          />
+                        )
                       }}
                       connectNulls
                     />
@@ -411,7 +447,25 @@ export function PedestrianChart({
                     name={metricLabel}
                     stroke={seriesColor}
                     strokeWidth={2.5}
-                    dot={false}
+                    dot={shouldShowMetricDots ? ((props: LineDotProps) => {
+                      const value = props.payload?.[metricKey]
+                      const hasRenderableValue =
+                        typeof value === "number" &&
+                        Number.isFinite(value) &&
+                        Number.isFinite(props.cx) &&
+                        Number.isFinite(props.cy)
+
+                      return (
+                        <circle
+                          key={lineDotKey(metricKey, "dot", props)}
+                          cx={hasRenderableValue ? props.cx : 0}
+                          cy={hasRenderableValue ? props.cy : 0}
+                          r={hasRenderableValue ? 3 : 0}
+                          fill={seriesColor}
+                          stroke={seriesColor}
+                        />
+                      )
+                    }) : false}
                     activeDot={{ r: 4, fill: seriesColor }}
                     cursor={canZoomIn ? "pointer" : "default"}
                   />
