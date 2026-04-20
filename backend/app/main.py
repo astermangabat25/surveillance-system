@@ -537,6 +537,12 @@ async def upload_video(
             pedestrian_tracks=result.get("pedestrianTracks", []),
             end_time=final_end_time,
         )
+
+        # Auto-delete raw uploads once processed output is available.
+        if response.get("processedPath"):
+            raw_target.unlink(missing_ok=True)
+            response = store.clear_video_raw_path(video["id"])
+
         if uploadId:
             store.set_upload_status(
                 uploadId,

@@ -1887,6 +1887,21 @@ def set_video_inference_result(
     return deepcopy(video)
 
 
+def clear_video_raw_path(video_id: str) -> dict[str, Any]:
+    state = load_state()
+    video = next((item for item in state["videos"] if item["id"] == video_id), None)
+    if video is None:
+        raise ValueError("Video not found")
+
+    if video.get("rawPath") is None:
+        return deepcopy(video)
+
+    video["rawPath"] = None
+    save_state(state)
+    _write_portable_video_artifacts(state, video)
+    return deepcopy(video)
+
+
 def remove_video(video_id: str) -> bool:
     state = load_state()
     original_video_count = len(state["videos"])
