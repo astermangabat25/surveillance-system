@@ -4,7 +4,7 @@ import { Suspense, useEffect, useMemo, useState } from "react"
 import { useSearchParams } from "next/navigation"
 import Link from "next/link"
 import { Button } from "@/components/ui/button"
-import { AlertCircle, ArrowLeft, Calendar, Clock, Loader2, MapPin, Play, ScanSearch, Sparkles, UserRound, Video } from "lucide-react"
+import { AlertCircle, ArrowLeft, Calendar, Car, Clock, Loader2, MapPin, Play, ScanSearch, Sparkles, Video } from "lucide-react"
 import { useLoading } from "@/components/ui/walking-loader"
 import { getMediaUrl, searchVideos, type SearchResult } from "@/lib/api"
 
@@ -375,7 +375,7 @@ function SearchResultCard({
           </div>
           {typeof result.pedestrianId === "number" ? (
             <div className="flex items-center gap-1.5">
-              <UserRound className="w-4 h-4" />
+              <Car className="w-4 h-4" />
               Track #{result.pedestrianId}
             </div>
           ) : null}

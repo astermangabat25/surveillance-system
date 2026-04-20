@@ -1,6 +1,6 @@
 "use client"
 
-import { AlertTriangle, MapPin, ScanLine, Users } from "lucide-react"
+import { AlertTriangle, Car, MapPin, ScanLine } from "lucide-react"
 import type { DashboardSummary } from "@/lib/api"
 
 interface KPICardsProps {
@@ -14,7 +14,7 @@ export function KPICards({ summary, loading = false }: KPICardsProps) {
       label: "Tracked Pedestrians",
       value: loading ? "--" : (summary?.totalUniquePedestrians ?? 0).toLocaleString(),
       hint: "All unique pedestrian tracks counted for the selected date",
-      icon: Users,
+      icon: Car,
       color: "primary",
     },
     {

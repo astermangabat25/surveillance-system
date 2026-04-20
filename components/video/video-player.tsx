@@ -1,7 +1,7 @@
 "use client"
 
 import { useEffect, useRef } from "react"
-import { AlertCircle, MapPin, Users } from "lucide-react"
+import { AlertCircle, Car, MapPin } from "lucide-react"
 import type { ROIConfiguration } from "@/lib/api"
 
 interface VideoPlayerProps {
@@ -188,7 +188,7 @@ export function VideoPlayer({
           {location}
         </span>
         <span className="inline-flex items-center gap-1.5 rounded-full bg-secondary px-2.5 py-1">
-          <Users className="h-3.5 w-3.5" />
+          <Car className="h-3.5 w-3.5" />
           {vehicleCount} vehicles
         </span>
       </div>

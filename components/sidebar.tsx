@@ -5,10 +5,10 @@ import Image from "next/image"
 import { usePathname } from "next/navigation"
 import { cn } from "@/lib/utils"
 import { 
+  Car,
   ListOrdered,
   LayoutDashboard, 
-  Video, 
-  User
+  Video
 } from "lucide-react"
 
 const navItems = [
@@ -64,7 +64,7 @@ export function Sidebar() {
       {/* Profile Avatar */}
       <div className="flex items-center justify-center pb-6">
         <div className="w-11 h-11 rounded-2xl bg-secondary flex items-center justify-center border border-border">
-          <User className="w-5 h-5 text-muted-foreground" />
+          <Car className="w-5 h-5 text-muted-foreground" />
         </div>
       </div>
     </aside>

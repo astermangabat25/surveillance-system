@@ -94,6 +94,8 @@ export interface EventRecord {
   frame?: number | null
   offsetSeconds?: number | null
   occlusionClass?: number | null
+  vehicleClass?: string | null
+  vehicleClassLabel?: string | null
 }
 
 export interface DashboardSummary {

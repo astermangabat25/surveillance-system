@@ -4,13 +4,12 @@ import { Suspense, use, useEffect, useMemo, useRef, useState } from "react"
 import Link from "next/link"
 import { useRouter, useSearchParams } from "next/navigation"
 import { VideoPlayer } from "@/components/video/video-player"
-import { VideoMetadata } from "@/components/video/video-metadata"
 import { PlaybackTimeline } from "@/components/video/playback-timeline"
 import { EventFeed } from "@/components/surveillance/event-feed"
 import { AISearchBar } from "@/components/surveillance/ai-search-bar"
 import { Button } from "@/components/ui/button"
 import { Switch } from "@/components/ui/switch"
-import { Activity, AlertCircle, ArrowLeft, Car, Clock3, Download, Loader2, Share2, Trash2 } from "lucide-react"
+import { AlertCircle, ArrowLeft, BarChart3, Car, Download, Gauge, Loader2, OctagonAlert, Share2, Trash2 } from "lucide-react"
 import { deleteVideo, getEvents, getLocations, getMediaUrl, getVideo, getVideoPlaybackPath, type EventRecord, type LocationRecord, type VideoDetailRecord, type VideoPedestrianTrackRecord, type VideoSeverityBucket } from "@/lib/api"
 
 type LOSLevel = "A" | "B" | "C" | "D" | "E" | "F"
@@ -72,11 +71,19 @@ function parseClockToSeconds(value: string): number | null {
   return (parts[0] * 60) + parts[1]
 }
 
-function inferOffsetFromTimestamp(timestamp?: string | null): number | null {
+function inferOffsetFromTimestamp(timestamp?: string | null, startTime?: string | null): number | null {
   if (!timestamp) return null
-  const seconds = parseClockToSeconds(timestamp)
-  if (seconds === null) return null
-  return Math.max(0, seconds)
+
+  const eventSeconds = parseClockToSeconds(timestamp)
+  if (eventSeconds === null) return null
+
+  const startSeconds = parseClockToSeconds(startTime ?? "")
+  if (startSeconds === null) {
+    return Math.max(0, eventSeconds)
+  }
+
+  const normalizedEnd = eventSeconds >= startSeconds ? eventSeconds : eventSeconds + (24 * 3600)
+  return Math.max(0, normalizedEnd - startSeconds)
 }
 
 function normalizeLos(level: unknown): LOSLevel | null {
@@ -141,7 +148,6 @@ function VideoDetailContent({ params }: { params: Promise<{ id: string }> }) {
   const [currentTimeSeconds, setCurrentTimeSeconds] = useState(0)
   const [durationSeconds, setDurationSeconds] = useState(0)
   const [portableTimelineRows, setPortableTimelineRows] = useState<PortableTimelineRow[]>([])
-  const [showAllDetections, setShowAllDetections] = useState(false)
   const [showROI, setShowROI] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const videoElementRef = useRef<HTMLVideoElement | null>(null)
@@ -186,7 +192,6 @@ function VideoDetailContent({ params }: { params: Promise<{ id: string }> }) {
   }, [id])
 
   useEffect(() => {
-    setShowAllDetections(false)
     setShowROI(false)
     setCurrentTimeSeconds(0)
     setDurationSeconds(0)
@@ -287,10 +292,10 @@ function VideoDetailContent({ params }: { params: Promise<{ id: string }> }) {
           return event
         }
 
-        const inferredOffset = inferOffsetFromTimestamp(event.timestamp)
+        const inferredOffset = inferOffsetFromTimestamp(event.timestamp, video?.startTime)
         return inferredOffset === null ? event : { ...event, offsetSeconds: inferredOffset }
       }),
-    [events],
+    [events, video?.startTime],
   )
 
   const orderedEvents = useMemo(
@@ -318,17 +323,58 @@ function VideoDetailContent({ params }: { params: Promise<{ id: string }> }) {
     return Number.isFinite(seekValue) && seekValue >= 0 ? [seekValue] : []
   }, [searchParams])
 
-  const detectionDetails = useMemo(() => {
-    const seen = new Set<number>()
+  const vehicleClassSummary = useMemo(() => {
+    const classPatterns: Array<{ label: string; pattern: RegExp }> = [
+      { label: "Jeepney", pattern: /\bjeepney\b/i },
+      { label: "Tricycle", pattern: /\btricycle\b/i },
+      { label: "Motorcycle", pattern: /\bmotorcycle\b|\bmotorbike\b/i },
+      { label: "Bicycle", pattern: /\bbicycle\b|\bbike\b/i },
+      { label: "Truck", pattern: /\btruck\b/i },
+      { label: "Bus", pattern: /\bbus\b/i },
+      { label: "Van", pattern: /\bvan\b/i },
+      { label: "SUV", pattern: /\bsuv\b/i },
+      { label: "Car", pattern: /\bcar\b|\bauto\b|\bautomobile\b/i },
+    ]
 
-    return orderedEvents
-      .filter((event): event is EventRecord & { pedestrianId: number } => typeof event.pedestrianId === "number")
-      .filter((event) => {
-        if (seen.has(event.pedestrianId)) return false
-        seen.add(event.pedestrianId)
-        return true
-      })
-      .map((event) => ({ id: event.pedestrianId, status: getDetectionStatus(event) }))
+    const formatVehicleClassLabel = (value: string) =>
+      value
+        .split(/[-_\s]+/)
+        .filter(Boolean)
+        .map((part) => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase())
+        .join(" ")
+
+    const detectionEvents = orderedEvents.filter((event) => event.type === "detection")
+    const counts = new Map<string, number>()
+
+    for (const event of detectionEvents) {
+      const backendLabel = (event.vehicleClassLabel ?? "").trim()
+      const backendClass = (event.vehicleClass ?? "").trim()
+      let classLabel = backendLabel || (backendClass ? formatVehicleClassLabel(backendClass) : "")
+
+      if (!classLabel) {
+        const description = event.description ?? ""
+        const matched = classPatterns.find((item) => item.pattern.test(description))
+        classLabel = matched?.label ?? "Unclassified"
+      }
+
+      counts.set(classLabel, (counts.get(classLabel) ?? 0) + 1)
+    }
+
+    const classRows = Array.from(counts.entries())
+      .map(([label, count]) => ({ label, count }))
+      .sort((left, right) => right.count - left.count)
+
+    const uniqueVehicleTracks = new Set(
+      detectionEvents
+        .map((event) => event.pedestrianId)
+        .filter((pedestrianId): pedestrianId is number => typeof pedestrianId === "number"),
+    ).size
+
+    return {
+      rows: classRows,
+      totalDetections: detectionEvents.length,
+      uniqueVehicleTracks,
+    }
   }, [orderedEvents])
 
   const vehiclePlaybackWindows = useMemo(() => {
@@ -598,8 +644,6 @@ function VideoDetailContent({ params }: { params: Promise<{ id: string }> }) {
 
   const effectiveDurationSeconds = durationSeconds > 0 ? durationSeconds : fallbackDurationSeconds
 
-  const visibleDetectionDetails = showAllDetections ? detectionDetails : detectionDetails.slice(0, 15)
-  const hasCollapsedDetections = detectionDetails.length > 15
   const hasLocationROI = Boolean(videoLocation?.roiCoordinates?.includePolygonsNorm?.length)
 
   const mediaUrl = video ? getMediaUrl(getVideoPlaybackPath(video)) : null
@@ -613,7 +657,7 @@ function VideoDetailContent({ params }: { params: Promise<{ id: string }> }) {
       cardClassName: "border-emerald-400/30 bg-gradient-to-br from-emerald-500/18 via-green-500/10 to-transparent",
     },
     {
-      icon: Activity,
+      icon: Gauge,
       value: formatLos(losSummary.current),
       caption: "Current LOS",
       iconClassName: "bg-violet-500/90 text-white ring-violet-500/20",
@@ -621,12 +665,20 @@ function VideoDetailContent({ params }: { params: Promise<{ id: string }> }) {
       cardClassName: "border-violet-400/25 bg-gradient-to-br from-violet-500/12 via-fuchsia-500/8 to-transparent",
     },
     {
-      icon: Clock3,
+      icon: OctagonAlert,
       value: formatLos(losSummary.worst),
       caption: "Worst LOS",
       iconClassName: "bg-amber-500/90 text-white ring-amber-500/20",
       valueClassName: "text-foreground",
       cardClassName: "border-amber-400/25 bg-gradient-to-br from-amber-500/12 via-orange-500/8 to-transparent",
+    },
+    {
+      icon: BarChart3,
+      value: formatLos(losSummary.average),
+      caption: "Average LOS",
+      iconClassName: "bg-sky-500/90 text-white ring-sky-500/20",
+      valueClassName: "text-foreground",
+      cardClassName: "border-sky-400/25 bg-gradient-to-br from-sky-500/12 via-cyan-500/8 to-transparent",
     },
   ]
 
@@ -801,13 +853,13 @@ function VideoDetailContent({ params }: { params: Promise<{ id: string }> }) {
               onDurationChange={setDurationSeconds}
             />
 
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            <div className="flex flex-nowrap gap-3 overflow-x-auto pb-1">
               {metricTiles.map((tile) => {
                 const Icon = tile.icon
                 return (
                   <div
                     key={tile.caption}
-                    className={`flex items-center gap-3 rounded-2xl border px-4 py-3 shadow-elevated-sm ${tile.cardClassName}`}
+                    className={`flex min-w-[220px] flex-1 items-center gap-3 rounded-2xl border px-4 py-3 shadow-elevated-sm ${tile.cardClassName}`}
                   >
                     <div className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl ring-4 ${tile.iconClassName}`}>
                       <Icon className="h-5 w-5" />
@@ -833,19 +885,6 @@ function VideoDetailContent({ params }: { params: Promise<{ id: string }> }) {
               onSeek={requestSeek}
             />
             
-            {/* Metadata Section */}
-            <VideoMetadata 
-              date={video.date}
-              startTime={video.startTime}
-              endTime={video.endTime}
-              gpsLat={video.gpsLat}
-              gpsLng={video.gpsLng}
-              trackedVehiclesSoFar={trackedVehiclesSoFar}
-              vehicleCount={video.pedestrianCount}
-              currentLOS={losSummary.current}
-              worstLOS={losSummary.worst}
-              averageLOS={losSummary.average}
-            />
           </div>
         </div>
       </div>
@@ -853,6 +892,54 @@ function VideoDetailContent({ params }: { params: Promise<{ id: string }> }) {
       {/* Right Sidebar - Filtered Event Feed */}
       <aside className="w-80 border-l border-border bg-card flex flex-col h-full">
         <AISearchBar />
+
+        {/* Vehicle Class Summary */}
+        <div className="border-b border-border p-4">
+          <h4 className="mb-3 text-sm font-medium text-foreground">Vehicle Class Summary</h4>
+          {vehicleClassSummary.totalDetections > 0 ? (
+            <div className="space-y-3">
+              <div className="grid grid-cols-2 gap-2 text-xs">
+                <div className="rounded-lg border border-border bg-secondary/40 px-2.5 py-2">
+                  <p className="text-muted-foreground">Detections</p>
+                  <p className="mt-1 text-sm font-semibold text-foreground">{vehicleClassSummary.totalDetections}</p>
+                </div>
+                <div className="rounded-lg border border-border bg-secondary/40 px-2.5 py-2">
+                  <p className="text-muted-foreground">Unique Tracks</p>
+                  <p className="mt-1 text-sm font-semibold text-foreground">{vehicleClassSummary.uniqueVehicleTracks}</p>
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                {vehicleClassSummary.rows.map((item) => {
+                  const percentage = vehicleClassSummary.totalDetections > 0
+                    ? Math.round((item.count / vehicleClassSummary.totalDetections) * 100)
+                    : 0
+
+                  return (
+                    <div key={item.label} className="rounded-lg border border-border bg-secondary/30 p-2">
+                      <div className="mb-1 flex items-center justify-between text-xs">
+                        <span className="font-medium text-foreground">{item.label}</span>
+                        <span className="text-muted-foreground">{item.count} ({percentage}%)</span>
+                      </div>
+                      <div className="h-1.5 overflow-hidden rounded-full bg-secondary">
+                        <div className="h-full rounded-full bg-primary" style={{ width: `${percentage}%` }} />
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+
+              {vehicleClassSummary.rows.length === 1 && vehicleClassSummary.rows[0]?.label === "Unclassified" ? (
+                <p className="text-[11px] text-muted-foreground">
+                  Class labels are not present in this video&apos;s event payload, so detections are grouped as unclassified.
+                </p>
+              ) : null}
+            </div>
+          ) : (
+            <p className="text-sm text-muted-foreground">No detection events are available yet for class summarization.</p>
+          )}
+        </div>
+
         <EventFeed
           filteredVideoId={id}
           events={orderedEvents}
@@ -860,29 +947,6 @@ function VideoDetailContent({ params }: { params: Promise<{ id: string }> }) {
           selectedEventId={selectedEventId}
           onEventSelect={handleEventSelect}
         />
-        
-        {/* Detection Details */}
-        <div className="border-t border-border p-4">
-            <h4 className="text-sm font-medium text-foreground mb-3">Vehicle Detection Details</h4>
-          {detectionDetails.length > 0 ? (
-            <div className="space-y-2">
-              {visibleDetectionDetails.map((detail) => (
-                <DetectionDetail key={detail.id} id={detail.id} status={detail.status} />
-              ))}
-              {hasCollapsedDetections && (
-                <Button
-                  variant="outline"
-                  className="w-full rounded-2xl border-border text-foreground hover:bg-secondary"
-                  onClick={() => setShowAllDetections((current) => !current)}
-                >
-                  {showAllDetections ? "Show less" : `View ${detectionDetails.length - 15} more`}
-                </Button>
-              )}
-            </div>
-          ) : (
-            <p className="text-sm text-muted-foreground">No tracked vehicle IDs are available for this video yet.</p>
-          )}
-        </div>
       </aside>
     </div>
   )
@@ -901,13 +965,3 @@ export default function VideoDetailPage({ params }: { params: Promise<{ id: stri
   )
 }
 
-function DetectionDetail({ id, status }: { id: number; status: string }) {
-  const statusColor = status === "Tracked" ? "text-primary" : status === "Requires Review" ? "text-destructive" : "text-accent"
-  
-  return (
-    <div className="flex items-center justify-between p-2 rounded-lg bg-secondary/50 border border-border">
-      <span className="text-sm text-foreground">Vehicle ID #{id}</span>
-      <span className={`text-xs ${statusColor}`}>{status}</span>
-    </div>
-  )
-}

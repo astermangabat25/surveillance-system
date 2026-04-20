@@ -2,7 +2,7 @@
 
 import { useMemo } from "react"
 import { useRouter } from "next/navigation"
-import { AlertCircle, ArrowRight, Loader2, User } from "lucide-react"
+import { AlertCircle, ArrowRight, Car, Loader2 } from "lucide-react"
 import type { EventRecord } from "@/lib/api"
 
 interface EventFeedProps {
@@ -130,7 +130,7 @@ function EventCard({
     >
       <div className="flex items-start gap-3">
         <div className="w-14 h-10 rounded-xl bg-[#1C1C1E] flex items-center justify-center shrink-0">
-          {isDetection ? <User className="w-4 h-4 text-accent" /> : <AlertCircle className="w-4 h-4 text-chart-4" />}
+          {isDetection ? <Car className="w-4 h-4 text-accent" /> : <AlertCircle className="w-4 h-4 text-chart-4" />}
         </div>
 
         <div className="flex-1 min-w-0">

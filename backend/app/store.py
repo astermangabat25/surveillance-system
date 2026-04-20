@@ -905,6 +905,54 @@ def _event_offset_seconds(event: dict[str, Any]) -> Optional[float]:
     return float((parsed_clock.hour * 3600) + (parsed_clock.minute * 60) + parsed_clock.second)
 
 
+def _normalize_vehicle_class_name(value: Any) -> Optional[str]:
+    raw = str(value or "").strip().lower()
+    if not raw:
+        return None
+
+    compact = re.sub(r"[^a-z0-9]+", "-", raw).strip("-")
+    if not compact:
+        return None
+
+    aliases = {
+        "auto": "car",
+        "automobile": "car",
+        "motorbike": "motorcycle",
+        "bike": "bicycle",
+    }
+    return aliases.get(compact, compact)
+
+
+def _vehicle_class_label(class_name: Any) -> Optional[str]:
+    normalized = _normalize_vehicle_class_name(class_name)
+    if not normalized:
+        return None
+    return " ".join(part.capitalize() for part in normalized.replace("_", "-").split("-") if part)
+
+
+def _infer_vehicle_class_from_description(description: Any) -> Optional[str]:
+    text = str(description or "").strip().lower()
+    if not text:
+        return None
+
+    matchers: list[tuple[str, re.Pattern[str]]] = [
+        ("jeepney", re.compile(r"\bjeepney\b", re.IGNORECASE)),
+        ("tricycle", re.compile(r"\btricycle\b", re.IGNORECASE)),
+        ("motorcycle", re.compile(r"\bmotorcycle\b|\bmotorbike\b", re.IGNORECASE)),
+        ("bicycle", re.compile(r"\bbicycle\b|\bbike\b", re.IGNORECASE)),
+        ("truck", re.compile(r"\btruck\b", re.IGNORECASE)),
+        ("bus", re.compile(r"\bbus\b", re.IGNORECASE)),
+        ("van", re.compile(r"\bvan\b", re.IGNORECASE)),
+        ("suv", re.compile(r"\bsuv\b", re.IGNORECASE)),
+        ("car", re.compile(r"\bcar\b|\bauto\b|\bautomobile\b", re.IGNORECASE)),
+    ]
+    for class_name, pattern in matchers:
+        if pattern.search(text):
+            return class_name
+
+    return None
+
+
 def _video_detail_tracks_from_events(state: dict[str, Any], video_id: str) -> list[dict[str, Any]]:
     windows_by_pedestrian: dict[int, dict[str, float]] = {}
 
@@ -1020,6 +1068,8 @@ def _video_event_rows(video_events: list[dict[str, Any]]) -> list[dict[str, Any]
                 "frame": event.get("frame"),
                 "occlusionClass": event.get("occlusionClass"),
                 "occlusionLabel": _occlusion_label(event.get("occlusionClass")),
+                "vehicleClass": event.get("vehicleClass"),
+                "vehicleClassLabel": event.get("vehicleClassLabel") or _vehicle_class_label(event.get("vehicleClass")),
                 "description": event.get("description"),
             }
         )
@@ -1845,6 +1895,13 @@ def list_events(video_id: Optional[str] = None) -> list[dict[str, Any]]:
         inferred_offset = _event_offset_seconds(event_copy)
         if inferred_offset is not None:
             event_copy["offsetSeconds"] = inferred_offset
+
+        normalized_vehicle_class = _normalize_vehicle_class_name(event_copy.get("vehicleClass"))
+        if normalized_vehicle_class is None:
+            normalized_vehicle_class = _infer_vehicle_class_from_description(event_copy.get("description"))
+
+        event_copy["vehicleClass"] = normalized_vehicle_class
+        event_copy["vehicleClassLabel"] = _vehicle_class_label(normalized_vehicle_class)
         normalized_events.append(event_copy)
 
     return normalized_events

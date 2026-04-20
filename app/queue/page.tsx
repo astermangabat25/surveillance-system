@@ -3,7 +3,6 @@
 import Link from "next/link"
 import { useState } from "react"
 import { QueueItem } from "@/components/queue/queue-item"
-import { QueueUploadZone } from "@/components/queue/upload-zone"
 import { useUploadQueue } from "@/components/uploads/upload-queue-provider"
 import {
   AlertDialog,
@@ -15,13 +14,16 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
+import { Button } from "@/components/ui/button"
 import { ChevronLeft, FileVideo } from "lucide-react"
 
 export default function QueuePage() {
-  const { uploads, cancelUpload, activeCount, queuedCount, completedCount, maxConcurrentUploads } = useUploadQueue()
+  const { uploads, cancelUpload, clearQueue, activeCount, queuedCount, completedCount } = useUploadQueue()
   const [pendingCancelId, setPendingCancelId] = useState<string | null>(null)
+  const [isClearDialogOpen, setIsClearDialogOpen] = useState(false)
   const [isCancelling, setIsCancelling] = useState(false)
   const pendingCancelUpload = uploads.find((upload) => upload.id === pendingCancelId) ?? null
+  const terminalUploadsCount = uploads.filter((upload) => upload.state === "complete" || upload.state === "error" || upload.state === "cancelled").length
 
   const handleConfirmCancel = async () => {
     if (!pendingCancelUpload) {
@@ -58,6 +60,16 @@ export default function QueuePage() {
             </div>
 
             <div className="hidden items-center gap-2 md:flex">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="rounded-xl"
+                disabled={terminalUploadsCount === 0}
+                onClick={() => setIsClearDialogOpen(true)}
+              >
+                Clear Queue
+              </Button>
               <div className="rounded-2xl border border-border bg-secondary px-4 py-2 text-right">
                 <p className="text-[11px] text-muted-foreground">Total</p>
                 <p className="text-lg font-semibold text-white">{uploads.length}</p>
@@ -68,14 +80,7 @@ export default function QueuePage() {
       </header>
 
       <div className="mx-auto max-w-4xl p-6">
-        <QueueUploadZone
-          activeCount={activeCount}
-          queuedCount={queuedCount}
-          completedCount={completedCount}
-          maxConcurrentUploads={maxConcurrentUploads}
-        />
-
-        <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
           <div className="rounded-2xl border border-border bg-card px-4 py-3 shadow-elevated-sm">
             <p className="text-sm text-muted-foreground">Active</p>
             <p className="mt-1 text-2xl font-semibold text-white">{activeCount}</p>
@@ -95,13 +100,26 @@ export default function QueuePage() {
             <section className="rounded-2xl border border-border bg-card px-6 py-12 text-center shadow-elevated-sm">
               <FileVideo className="mx-auto mb-3 h-12 w-12 opacity-50" />
               <p className="text-muted-foreground">No videos in queue</p>
-              <p className="text-sm text-muted-foreground">Upload videos to start processing</p>
+              <p className="text-sm text-muted-foreground">Queue items will appear here while videos are being processed.</p>
             </section>
           ) : (
             uploads.map((upload) => (
               <QueueItem key={upload.id} upload={upload} onCancelRequest={setPendingCancelId} />
             ))
           )}
+        </div>
+
+        <div className="mt-4 flex md:hidden">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="w-full rounded-xl"
+            disabled={terminalUploadsCount === 0}
+            onClick={() => setIsClearDialogOpen(true)}
+          >
+            Clear Queue
+          </Button>
         </div>
       </div>
 
@@ -124,6 +142,30 @@ export default function QueuePage() {
               }}
             >
               {isCancelling ? "Cancelling..." : "Yes, Cancel Upload"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={isClearDialogOpen} onOpenChange={setIsClearDialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Clear completed uploads?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This removes completed, failed, and cancelled items from the queue. Active and waiting uploads stay in place.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Keep Items</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={(event) => {
+                event.preventDefault()
+                clearQueue()
+                setIsClearDialogOpen(false)
+              }}
+            >
+              Clear Queue
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

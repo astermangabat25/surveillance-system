@@ -58,6 +58,7 @@ interface UploadQueueContextValue {
   uploads: UploadQueueItem[]
   enqueueUploads: (items: EnqueuedUploadInput[]) => void
   cancelUpload: (queueItemId: string) => Promise<void>
+  clearQueue: () => void
   activeCount: number
   queuedCount: number
   completedCount: number
@@ -335,15 +336,10 @@ function isMissingUploadStatusError(error: unknown) {
 }
 
 function sortUploadsForDisplay(left: UploadQueueItem, right: UploadQueueItem) {
-  const rank = (item: UploadQueueItem) => {
-    if (!isTerminalState(item.state)) return 0
-    if (item.state === "error") return 1
-    if (item.state === "cancelled") return 2
-    return 3
+  const createdAtDelta = new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime()
+  if (createdAtDelta !== 0) {
+    return createdAtDelta
   }
-
-  const rankDelta = rank(left) - rank(right)
-  if (rankDelta !== 0) return rankDelta
 
   return new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime()
 }
@@ -734,6 +730,14 @@ export function UploadQueueProvider({ children }: { children: ReactNode }) {
     [updateUpload],
   )
 
+  const clearQueue = useCallback(() => {
+    setUploads((currentUploads) => {
+      const nextUploads = currentUploads.filter((upload) => !isTerminalState(upload.state))
+      settledIdsRef.current = new Set(nextUploads.filter((upload) => isTerminalState(upload.state)).map((upload) => upload.id))
+      return nextUploads
+    })
+  }, [])
+
   const sortedUploads = useMemo(() => [...uploads].sort(sortUploadsForDisplay), [uploads])
 
   const activeUploads = useMemo(() => sortedUploads.filter(isActiveUpload), [sortedUploads])
@@ -745,6 +749,7 @@ export function UploadQueueProvider({ children }: { children: ReactNode }) {
       uploads: sortedUploads,
       enqueueUploads,
       cancelUpload,
+      clearQueue,
       activeCount,
       queuedCount,
       completedCount,
@@ -752,7 +757,7 @@ export function UploadQueueProvider({ children }: { children: ReactNode }) {
       settledUploadsVersion,
       maxConcurrentUploads: MAX_CONCURRENT_UPLOADS,
     }),
-    [activeCount, cancelUpload, completedCount, enqueueUploads, queuedCount, settledUploadsVersion, sortedUploads],
+    [activeCount, cancelUpload, clearQueue, completedCount, enqueueUploads, queuedCount, settledUploadsVersion, sortedUploads],
   )
 
   return (

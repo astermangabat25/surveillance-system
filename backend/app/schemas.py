@@ -91,6 +91,8 @@ class EventRecord(BaseModel):
     frame: Optional[int] = None
     offsetSeconds: Optional[float] = None
     occlusionClass: Optional[int] = None
+    vehicleClass: Optional[str] = None
+    vehicleClassLabel: Optional[str] = None
 
 
 class DashboardSummary(BaseModel):

@@ -750,6 +750,31 @@ def _counts_description(track_id: Optional[int], line_name: str, direction: str)
     return f"{pedestrian_label} crossed {crossing_line} ({crossing_direction})"
 
 
+def _normalize_vehicle_class_name(value: Any) -> Optional[str]:
+    raw = str(value or "").strip().lower()
+    if not raw:
+        return None
+
+    compact = re.sub(r"[^a-z0-9]+", "-", raw).strip("-")
+    if not compact:
+        return None
+
+    aliases = {
+        "auto": "car",
+        "automobile": "car",
+        "motorbike": "motorcycle",
+        "bike": "bicycle",
+    }
+    return aliases.get(compact, compact)
+
+
+def _vehicle_class_label(class_name: Optional[str]) -> Optional[str]:
+    if not class_name:
+        return None
+
+    return " ".join(part.capitalize() for part in class_name.replace("_", "-").split("-") if part)
+
+
 def _parse_counts_csv(
     *,
     output_video_path: Path,
@@ -788,6 +813,7 @@ def _parse_counts_csv(
         line_name = str(row.get("line_name") or "").strip()
         direction = str(row.get("direction") or "").strip()
         class_name = str(row.get("class_name") or "").strip().lower()
+        normalized_vehicle_class = _normalize_vehicle_class_name(class_name)
         if class_name == "person":
             saw_person_label = True
 
@@ -837,6 +863,8 @@ def _parse_counts_csv(
                 "frame": frame_number,
                 "offsetSeconds": None,
                 "occlusionClass": None,
+                "vehicleClass": normalized_vehicle_class,
+                "vehicleClassLabel": _vehicle_class_label(normalized_vehicle_class),
             }
         )
 

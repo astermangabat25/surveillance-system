@@ -1,6 +1,6 @@
 "use client"
 
-import { Calendar, Clock, MapPin, Users } from "lucide-react"
+import { Calendar, Car, Clock, MapPin } from "lucide-react"
 
 interface VideoMetadataProps {
   date: string
@@ -45,25 +45,25 @@ export function VideoMetadata({
         value={`${gpsLat.toFixed(4)}, ${gpsLng.toFixed(4)}`}
       />
       <MetadataCard
-        icon={Users}
+        icon={Car}
         label="Tracked Vehicles"
         value={trackedVehiclesSoFar.toString()}
         highlight
       />
       <MetadataCard
-        icon={Users}
+        icon={Car}
         label="Total Vehicles"
         value={vehicleCount.toString()}
         highlight
       />
       <MetadataCard
-        icon={Users}
+        icon={Car}
         label="LOS (Current/Worst)"
         value={`${currentLOS ?? "--"} / ${worstLOS ?? "--"}`}
         highlight
       />
       <MetadataCard
-        icon={Users}
+        icon={Car}
         label="LOS (Average)"
         value={averageLOS ?? "--"}
         highlight
