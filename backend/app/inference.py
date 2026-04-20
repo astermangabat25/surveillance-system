@@ -23,9 +23,10 @@ MAX_TRACK_EVENTS = 50
 TRACK_THUMBNAIL_MAX_EDGE = 224
 SEMANTIC_CROP_LABEL_ORDER = ("best", "early", "mid", "late")
 CLOCK_TIME_FORMATS = ("%H:%M", "%H:%M:%S", "%I:%M %p", "%I:%M:%S %p")
-LEGACY_INFERENCE_REQUIREMENTS_DIR = store.STORAGE_DIR / "inference_requirements"
-INFERENCE_REQUIREMENTS_DIR = store.BACKEND_DIR / "inference_requirements"
-INFERENCE_CONFIGS_DIR = INFERENCE_REQUIREMENTS_DIR / "configs" / "rtdetr"
+INFERENCE_REQUIREMENTS_DIR = store.BACKEND_DIR / "Occlusion-Robust-RTDETR" / "inference_requirements"
+LEGACY_INFERENCE_REQUIREMENTS_DIR = store.BACKEND_DIR / "inference_requirements"
+LEGACY_STORAGE_INFERENCE_REQUIREMENTS_DIR = store.STORAGE_DIR / "inference_requirements"
+CANONICAL_INFERENCE_CONFIGS_DIR = store.BACKEND_DIR / "Occlusion-Robust-RTDETR" / "configs" / "rtdetr"
 INFERENCE_ANNOTATIONS_DIR = INFERENCE_REQUIREMENTS_DIR / "annotations"
 INFERENCE_COUNTING_DIR = INFERENCE_REQUIREMENTS_DIR / "counting"
 _DEFAULT_INFERENCE_MAX_RUNTIME_SECONDS = 1800.0
@@ -121,9 +122,15 @@ def _ensure_inference_requirements_layout() -> None:
     if INFERENCE_REQUIREMENTS_DIR.exists():
         return
 
-    if LEGACY_INFERENCE_REQUIREMENTS_DIR.exists():
+    fallback_dirs = [LEGACY_INFERENCE_REQUIREMENTS_DIR, LEGACY_STORAGE_INFERENCE_REQUIREMENTS_DIR]
+    for fallback_dir in fallback_dirs:
+        if not fallback_dir.exists():
+            continue
+
         INFERENCE_REQUIREMENTS_DIR.mkdir(parents=True, exist_ok=True)
-        for child in LEGACY_INFERENCE_REQUIREMENTS_DIR.iterdir():
+        for child in fallback_dir.iterdir():
+            if child.name == "configs":
+                continue
             target = INFERENCE_REQUIREMENTS_DIR / child.name
             if child.is_dir():
                 shutil.copytree(child, target, dirs_exist_ok=True)
@@ -140,8 +147,8 @@ def requirements_root_dir() -> Path:
 
 
 def requirements_config_dir() -> Path:
-    _ensure_inference_requirements_layout()
-    return INFERENCE_CONFIGS_DIR
+    CANONICAL_INFERENCE_CONFIGS_DIR.mkdir(parents=True, exist_ok=True)
+    return CANONICAL_INFERENCE_CONFIGS_DIR
 
 
 def requirements_annotations_dir() -> Path:
@@ -186,13 +193,7 @@ def _infer_config_path() -> Path:
     occlusion_repo = _occlusion_repo_dir()
     preferred_candidates = [
         occlusion_repo / "configs" / "rtdetr" / "rtdetr_r50_final.yml",
-        occlusion_repo / "configs" / "rtdetr" / "rtdetr_custom.yml",
-        occlusion_repo / "configs" / "rtdetr" / "custom_rtdetr_r101vd_6x_coco.yml",
-        occlusion_repo / "configs" / "rtdetr" / "others" / "rtdetr_r50vd_6x_coco.yml",
-        INFERENCE_CONFIGS_DIR / "rtdetr_r50_final.yml",
-        INFERENCE_CONFIGS_DIR / "rtdetr_custom.yml",
-        INFERENCE_CONFIGS_DIR / "custom_rtdetr_r101vd_6x_coco.yml",
-        INFERENCE_CONFIGS_DIR / "rtdetr_r50vd_6x_coco.yml",
+        CANONICAL_INFERENCE_CONFIGS_DIR / "rtdetr_r50_final.yml",
     ]
 
     for candidate in preferred_candidates:
@@ -307,6 +308,7 @@ def _first_missing_path(paths: list[Path]) -> Optional[Path]:
 def _model_search_roots() -> list[Path]:
     candidates = [
         store.MODELS_DIR,
+        store.LEGACY_MODELS_DIR,
         store.STORAGE_DIR,
         _thesis_root_dir(),
         store.BACKEND_DIR,
@@ -1288,7 +1290,11 @@ def run_video_inference(
             raise RuntimeError(f"RT-DETR inference pipeline is not ready. Missing required path: {missing_path}")
         raise RuntimeError("RT-DETR inference pipeline is not ready.")
     if not status["modelExists"]:
-        raise RuntimeError("The active model file is missing from backend/storage/models.")
+        raise RuntimeError(
+            "The active model file is missing. Expected under "
+            f"{_project_relative_path(store.MODELS_DIR)} "
+            "(legacy fallback: backend/storage/models)."
+        )
 
     model_path = resolve_model_path(model_name or status["currentModel"])
     if model_path is None:

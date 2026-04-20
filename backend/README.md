@@ -6,7 +6,7 @@ This folder is the local-first backend for the surveillance frontend.
 
 1. Run frontend on Vercel/local with `npm run dev`
 2. Run backend locally with FastAPI + Uvicorn
-3. Keep uploads/models in `backend/storage/`
+3. Keep runtime uploads/exports in `backend/storage/` and model weights in `backend/Occlusion-Robust-RTDETR/weights/models/`
 4. Add database + Ultralytics integration after the UI is wired to real endpoints
 
 ## Suggested Python setup
@@ -28,16 +28,20 @@ Docs:
 
 ## Storage layout
 
-- `backend/storage/models/` → `.pt` weights
 - `backend/storage/videos/raw/` → uploaded source footage
 - `backend/storage/videos/processed/` → rendered detections / tracked exports
 - `backend/storage/exports/` → reports / downloadable artifacts
 
+## Model weights path
+
+- `backend/Occlusion-Robust-RTDETR/weights/models/` → uploaded active `.pt` / `.pth` model files
+- `backend/storage/models/` remains as a legacy fallback lookup path for older deployments
+
 ## Required inference assets
 
-- `backend/inference_requirements/configs/` → RT-DETR config files
-- `backend/inference_requirements/annotations/` → required annotations JSON
-- `backend/inference_requirements/counting/` → counting line configs
+- `backend/Occlusion-Robust-RTDETR/configs/` → RT-DETR config files
+- `backend/Occlusion-Robust-RTDETR/inference_requirements/annotations/` → required annotations JSON
+- `backend/Occlusion-Robust-RTDETR/inference_requirements/counting/` → counting line configs
 
 These required files are intentionally kept outside `backend/storage/` so `backend/storage/` can be fully git-ignored as runtime data.
 

@@ -20,7 +20,9 @@ logger = logging.getLogger(__name__)
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 STORAGE_DIR = BACKEND_DIR / "storage"
-MODELS_DIR = STORAGE_DIR / "models"
+RTDETR_DIR = BACKEND_DIR / "Occlusion-Robust-RTDETR"
+MODELS_DIR = RTDETR_DIR / "weights" / "models"
+LEGACY_MODELS_DIR = STORAGE_DIR / "models"
 RAW_VIDEOS_DIR = STORAGE_DIR / "videos" / "raw"
 PROCESSED_VIDEOS_DIR = STORAGE_DIR / "videos" / "processed"
 EXPORTS_DIR = STORAGE_DIR / "exports"
@@ -1510,7 +1512,16 @@ def seed_state() -> dict[str, Any]:
 
 
 def ensure_storage_layout() -> None:
-    for path in (STORAGE_DIR, MODELS_DIR, RAW_VIDEOS_DIR, PROCESSED_VIDEOS_DIR, EXPORTS_DIR, PORTABLE_DIR, PORTABLE_VIDEOS_DIR):
+    for path in (
+        STORAGE_DIR,
+        MODELS_DIR,
+        LEGACY_MODELS_DIR,
+        RAW_VIDEOS_DIR,
+        PROCESSED_VIDEOS_DIR,
+        EXPORTS_DIR,
+        PORTABLE_DIR,
+        PORTABLE_VIDEOS_DIR,
+    ):
         path.mkdir(parents=True, exist_ok=True)
     if not DATA_FILE.exists():
         DATA_FILE.write_text(json.dumps(seed_state(), indent=2), encoding="utf-8")
