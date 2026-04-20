@@ -36,6 +36,65 @@ const MINUTE_SECOND_OPTIONS = Array.from({ length: 60 }, (_, index) => {
 
 const MERIDIEM_OPTIONS = ["AM", "PM"] as const
 
+function inferGateSuffixFromLocation(locationName: string): string | null {
+  const normalizedLocation = locationName.toLowerCase().trim()
+  const compactLocation = normalizedLocation.replace(/[^a-z0-9.]+/g, "")
+
+  const hasGateKeyword = /\bgate\b/.test(normalizedLocation) || /\bgate\s*\d/.test(normalizedLocation) || compactLocation.startsWith("gate")
+  const hasGPrefix = /^g\d/.test(compactLocation)
+  if (!hasGateKeyword && !hasGPrefix) {
+    return null
+  }
+
+  let gateToken: string | null = null
+  if (hasGPrefix) {
+    const compactMatch = compactLocation.match(/^g(\d\.\d|\d{2}|\d)/)
+    gateToken = compactMatch?.[1] ?? null
+  }
+
+  if (!gateToken && hasGateKeyword) {
+    const gateMatch = normalizedLocation.match(/\bgate\s*(\d\.\d|\d{2}|\d)\b/)
+    gateToken = gateMatch?.[1] ?? null
+
+    if (!gateToken) {
+      const compactGateMatch = compactLocation.match(/gate(\d\.\d|\d{2}|\d)/)
+      gateToken = compactGateMatch?.[1] ?? null
+    }
+  }
+
+  if (!gateToken) {
+    return null
+  }
+
+  return {
+    "2": "g2",
+    "29": "g2.9",
+    "2.9": "g2.9",
+    "3": "g3",
+    "32": "g3.2",
+    "3.2": "g3.2",
+    "35": "g3.5",
+    "3.5": "g3.5",
+  }[gateToken] ?? null
+}
+
+function findGateMatchedCountingConfig(options: string[], locationName: string): string | null {
+  const suffix = inferGateSuffixFromLocation(locationName)
+  if (!suffix) {
+    return null
+  }
+
+  const expectedFileName = `counting_config_${suffix}.json`
+  const exact = options.find((option) => option.toLowerCase() === expectedFileName.toLowerCase())
+  if (exact) {
+    return exact
+  }
+
+  const escapedSuffix = suffix.replace(".", "\\.")
+  const suffixPattern = new RegExp(`(^|[^a-z0-9])${escapedSuffix}([^a-z0-9]|$)`, "i")
+  return options.find((option) => suffixPattern.test(option.toLowerCase())) ?? null
+}
+
 function composeTwentyFourHourTime(hour12: string, minute: string, second: string, meridiem: string) {
   const parsedHour12 = Number(hour12)
   if (!Number.isFinite(parsedHour12) || parsedHour12 < 1 || parsedHour12 > 12) {
@@ -162,6 +221,23 @@ export function AddVideoModal({ open, onOpenChange, locations, initialLocationId
       window.localStorage.setItem(LAST_COUNTING_CONFIG_STORAGE_KEY, selectedCountingConfig)
     }
   }, [selectedCountingConfig])
+
+  useEffect(() => {
+    if (!locationId || countingOptions.length === 0) {
+      return
+    }
+
+    const locationName = locations.find((location) => location.id === locationId)?.name
+    if (!locationName) {
+      return
+    }
+
+    const matched = findGateMatchedCountingConfig(countingOptions, locationName)
+    if (matched && matched !== selectedCountingConfig) {
+      setSelectedCountingConfig(matched)
+      setCountingConfigError(null)
+    }
+  }, [countingOptions, locationId, locations, selectedCountingConfig])
 
   const submitDisabledReason = useMemo(() => {
     if (isSubmitting) {
