@@ -589,12 +589,13 @@ export function getDashboardSummary(date?: string) {
   return request<DashboardSummary>(withQuery("/api/dashboard/summary", { date }))
 }
 
-export function getDashboardTraffic(date?: string, timeRange = "12h", focusTime?: string, zoomLevel = 0, startTime?: string) {
+export function getDashboardTraffic(date?: string, timeRange = "12h", focusTime?: string, zoomLevel = 0, startTime?: string, locationId?: string) {
   return request<TrafficResponse>(withQuery("/api/dashboard/traffic", {
     date,
     timeRange,
     focusTime,
     startTime,
+    locationId,
     zoomLevel: zoomLevel > 0 ? String(zoomLevel) : undefined,
   }))
 }

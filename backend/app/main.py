@@ -595,7 +595,10 @@ def get_dashboard_traffic(
     focusTime: Optional[str] = None,
     startTime: Optional[str] = None,
     zoomLevel: int = 0,
+    locationId: Optional[str] = None,
 ) -> dict[str, object]:
+    # `locationId` is accepted by the API for forward compatibility,
+    # but current store aggregation signature does not consume it.
     return store.dashboard_traffic(date, timeRange, focusTime, zoomLevel, startTime)
 
 

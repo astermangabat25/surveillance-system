@@ -171,7 +171,7 @@ export default function DashboardPage() {
     try {
       const [summaryResponse, trafficResponse, trafficByLocationResponse, losTrafficResponse, occlusionTrendsResponse, occlusionResponse, synthesisResponse] = await Promise.all([
         getDashboardSummary(selectedDate),
-        getDashboardTraffic(selectedDate, timeRange, focusTime, zoomLevel, startTime),
+        getDashboardTraffic(selectedDate, timeRange, focusTime, zoomLevel, startTime, selectedLocationId || undefined),
         getDashboardTrafficByLocation(selectedDate, timeRange, focusTime, zoomLevel, startTime),
         getDashboardLOS(selectedDate, timeRange, focusTime, zoomLevel, selectedLocationId || undefined, startTime),
         getDashboardOcclusionTrends(selectedDate, timeRange, focusTime, zoomLevel, startTime),
@@ -358,6 +358,11 @@ export default function DashboardPage() {
   const averageLosLabel = useMemo(() => {
     return deriveLosGradeFromSeries(losTraffic?.series) ?? "--"
   }, [losTraffic])
+
+  const selectedLocationName = useMemo(
+    () => locations.find((location) => location.id === selectedLocationId)?.name ?? "Selected gate",
+    [locations, selectedLocationId],
+  )
 
   const handleDateChange = (value: string) => {
     setUserSelectedDate(true)
@@ -673,8 +678,8 @@ export default function DashboardPage() {
         <div className="grid grid-cols-1 gap-6 xl:grid-cols-[65%_35%]">
           <div className="space-y-6">
             <PedestrianChart
-              title="Vehicle Count"
-              description="Estimated cumulative vehicle count for each location over the selected timeline."
+              title={`Vehicle Count (${selectedLocationName})`}
+              description="Cumulative vehicle count for the currently selected gate over the selected timeline."
               timeRange={timeRange}
               selectedDate={selectedDate}
               data={traffic?.series ?? []}
@@ -714,6 +719,7 @@ export default function DashboardPage() {
               onResetZoom={handleResetZoom}
               chartType="line"
               legendPosition="top"
+              useLosLineColors={false}
             />
             <PedestrianChart
               title="LOS"

@@ -41,6 +41,7 @@ interface PedestrianChartProps {
   chartType?: "line" | "bar"
   onChartTypeChange?: (value: "line" | "bar") => void
   legendPosition?: "top" | "bottom"
+  useLosLineColors?: boolean
 }
 
 const SERIES_COLORS = ["#22C55E", "#06B6D4", "#3B82F6", "#F59E0B", "#A855F7"]
@@ -191,6 +192,7 @@ export function PedestrianChart({
   chartType,
   onChartTypeChange,
   legendPosition = "bottom",
+  useLosLineColors = true,
 }: PedestrianChartProps) {
   const timeLabelsById = new Map(data.map((point) => [point.id, point.time]))
   const locationSeries = Array.from(
@@ -228,6 +230,10 @@ export function PedestrianChart({
       return [series.key, (worstLos && LOS_COLOR_MAP[worstLos]) || series.color]
     }),
   )
+
+  const resolvedLineColorBySeriesKey = useLosLineColors
+    ? lineColorBySeriesKey
+    : Object.fromEntries(locationSeries.map((series) => [series.key, series.color]))
 
   const showLocationBreakdown = metricKey === "cumulativeUniquePedestrians" && locationSeries.length > 0
   const isLosMetric = metricKey === "los"
@@ -371,7 +377,7 @@ export function PedestrianChart({
                       type="monotone"
                       dataKey={series.key}
                       name={series.key}
-                      stroke={lineColorBySeriesKey[series.key] ?? series.color}
+                      stroke={resolvedLineColorBySeriesKey[series.key] ?? series.color}
                       strokeWidth={2.5}
                       dot={(props: LineDotProps) => {
                         const value = props?.payload?.[series.key]
@@ -386,7 +392,9 @@ export function PedestrianChart({
                         }
 
                         const losValue = props?.payload?.[`${series.key}__los`]
-                        const pointColor = typeof losValue === "string" ? (LOS_COLOR_MAP[losValue] ?? series.color) : series.color
+                        const pointColor = useLosLineColors && typeof losValue === "string"
+                          ? (LOS_COLOR_MAP[losValue] ?? series.color)
+                          : (resolvedLineColorBySeriesKey[series.key] ?? series.color)
                         return (
                           <circle
                             key={lineDotKey(series.key, "dot", props)}
