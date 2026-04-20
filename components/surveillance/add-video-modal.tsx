@@ -24,6 +24,45 @@ import { getCountingConfigChoices, uploadInferenceRequirement } from "@/lib/api"
 
 const LAST_COUNTING_CONFIG_STORAGE_KEY = "alive-last-counting-config"
 
+const HOUR_OPTIONS = Array.from({ length: 12 }, (_, index) => {
+  const hour = index + 1
+  return { value: String(hour).padStart(2, "0"), label: String(hour) }
+})
+
+const MINUTE_SECOND_OPTIONS = Array.from({ length: 60 }, (_, index) => {
+  const value = String(index).padStart(2, "0")
+  return { value, label: value }
+})
+
+const MERIDIEM_OPTIONS = ["AM", "PM"] as const
+
+function composeTwentyFourHourTime(hour12: string, minute: string, second: string, meridiem: string) {
+  const parsedHour12 = Number(hour12)
+  if (!Number.isFinite(parsedHour12) || parsedHour12 < 1 || parsedHour12 > 12) {
+    return ""
+  }
+
+  const parsedMinute = Number(minute)
+  const parsedSecond = Number(second)
+  if (!Number.isFinite(parsedMinute) || parsedMinute < 0 || parsedMinute > 59) {
+    return ""
+  }
+  if (!Number.isFinite(parsedSecond) || parsedSecond < 0 || parsedSecond > 59) {
+    return ""
+  }
+
+  const normalizedMeridiem = meridiem === "PM" ? "PM" : meridiem === "AM" ? "AM" : ""
+  if (!normalizedMeridiem) {
+    return ""
+  }
+
+  const hour24 = normalizedMeridiem === "PM"
+    ? (parsedHour12 % 12) + 12
+    : parsedHour12 % 12
+
+  return `${String(hour24).padStart(2, "0")}:${String(parsedMinute).padStart(2, "0")}:${String(parsedSecond).padStart(2, "0")}`
+}
+
 interface AddVideoModalProps {
   open: boolean
   onOpenChange: (open: boolean) => void
@@ -55,6 +94,10 @@ export function AddVideoModal({ open, onOpenChange, locations, initialLocationId
   const [locationId, setLocationId] = useState("")
   const [date, setDate] = useState("")
   const [startTime, setStartTime] = useState("")
+  const [startHour, setStartHour] = useState("")
+  const [startMinute, setStartMinute] = useState("")
+  const [startSecond, setStartSecond] = useState("")
+  const [startMeridiem, setStartMeridiem] = useState("")
   const [countingOptions, setCountingOptions] = useState<string[]>([])
   const [selectedCountingConfig, setSelectedCountingConfig] = useState("")
   const [countingConfigError, setCountingConfigError] = useState<string | null>(null)
@@ -101,6 +144,18 @@ export function AddVideoModal({ open, onOpenChange, locations, initialLocationId
       void refreshCountingOptions()
     }
   }, [initialLocationId, open, refreshCountingOptions])
+
+  const setClockPart = useCallback(
+    (next: { hour?: string; minute?: string; second?: string; meridiem?: string }) => {
+      const nextHour = next.hour ?? startHour
+      const nextMinute = next.minute ?? startMinute
+      const nextSecond = next.second ?? startSecond
+      const nextMeridiem = next.meridiem ?? startMeridiem
+      const nextTime = composeTwentyFourHourTime(nextHour, nextMinute, nextSecond, nextMeridiem)
+      setStartTime(nextTime)
+    },
+    [startHour, startMeridiem, startMinute, startSecond],
+  )
 
   useEffect(() => {
     if (selectedCountingConfig && typeof window !== "undefined") {
@@ -225,6 +280,10 @@ export function AddVideoModal({ open, onOpenChange, locations, initialLocationId
     setLocationId("")
     setDate("")
     setStartTime("")
+    setStartHour("")
+    setStartMinute("")
+    setStartSecond("")
+    setStartMeridiem("")
     setCountingConfigError(null)
     setSubmitError(null)
     setIsLoadingCountingOptions(false)
@@ -427,16 +486,92 @@ export function AddVideoModal({ open, onOpenChange, locations, initialLocationId
           
           <div className="space-y-2">
             <label className="text-sm font-medium text-foreground">Start Time</label>
-            <Input 
-              type="time" 
-              step="1"
-              value={startTime}
-              onChange={(e) => {
-                setSubmitError(null)
-                setStartTime(e.target.value)
-              }}
-              className="bg-secondary border-border text-foreground"
-            />
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,110px)] sm:gap-3">
+              <Select
+                value={startHour}
+                onValueChange={(value) => {
+                  setSubmitError(null)
+                  setStartHour(value)
+                  setClockPart({ hour: value })
+                }}
+                disabled={isSubmitting}
+              >
+                <SelectTrigger className="w-full bg-secondary border-border text-foreground">
+                  <SelectValue placeholder="HH" />
+                </SelectTrigger>
+                <SelectContent className="max-h-72 bg-card border-border">
+                  {HOUR_OPTIONS.map((option) => (
+                    <SelectItem key={option.value} value={option.value} className="text-foreground">
+                      {option.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+
+              <Select
+                value={startMinute}
+                onValueChange={(value) => {
+                  setSubmitError(null)
+                  setStartMinute(value)
+                  setClockPart({ minute: value })
+                }}
+                disabled={isSubmitting}
+              >
+                <SelectTrigger className="w-full bg-secondary border-border text-foreground">
+                  <SelectValue placeholder="MM" />
+                </SelectTrigger>
+                <SelectContent className="max-h-72 bg-card border-border">
+                  {MINUTE_SECOND_OPTIONS.map((option) => (
+                    <SelectItem key={`minute-${option.value}`} value={option.value} className="text-foreground">
+                      {option.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+
+              <Select
+                value={startSecond}
+                onValueChange={(value) => {
+                  setSubmitError(null)
+                  setStartSecond(value)
+                  setClockPart({ second: value })
+                }}
+                disabled={isSubmitting}
+              >
+                <SelectTrigger className="w-full bg-secondary border-border text-foreground">
+                  <SelectValue placeholder="SS" />
+                </SelectTrigger>
+                <SelectContent className="max-h-72 bg-card border-border">
+                  {MINUTE_SECOND_OPTIONS.map((option) => (
+                    <SelectItem key={`second-${option.value}`} value={option.value} className="text-foreground">
+                      {option.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+
+              <Select
+                value={startMeridiem}
+                onValueChange={(value) => {
+                  setSubmitError(null)
+                  setStartMeridiem(value)
+                  setClockPart({ meridiem: value })
+                }}
+                disabled={isSubmitting}
+              >
+                <SelectTrigger className="w-full bg-secondary border-border text-foreground">
+                  <SelectValue placeholder="AM/PM" />
+                </SelectTrigger>
+                <SelectContent className="bg-card border-border">
+                  {MERIDIEM_OPTIONS.map((option) => (
+                    <SelectItem key={option} value={option} className="text-foreground">
+                      {option}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <p className="text-xs text-muted-foreground">Select hour, minute, and second for precise start timing.</p>
           </div>
 
           <div className="rounded-xl border border-border bg-secondary/40 p-4">
@@ -447,7 +582,6 @@ export function AddVideoModal({ open, onOpenChange, locations, initialLocationId
                   The upload starts at {startTime || "the selected start time"}. End time is computed from the processed video duration.
                 </p>
               </div>
-              <span className="rounded-full bg-primary/10 px-2.5 py-1 text-xs font-medium text-primary">Auto end time</span>
             </div>
           </div>
 

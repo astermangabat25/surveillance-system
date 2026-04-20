@@ -44,50 +44,8 @@ export function WalkingLoader({ isVisible, label, progress = null, onClose }: Wa
 
   const showElapsedTime = elapsedSeconds > 5
 
-  // Walking stick figure frames
-  const getStickFigure = (frameNum: number) => {
-    const poses = [
-      // Frame 0 - Right leg forward, left arm forward
-      {
-        leftArm: "M24 28 L18 36",
-        rightArm: "M36 28 L42 34",
-        leftLeg: "M26 48 L22 62 L18 68",
-        rightLeg: "M34 48 L40 60 L44 68",
-        body: "M30 28 L30 48",
-        head: { cx: 30, cy: 20 }
-      },
-      // Frame 1 - Legs passing, arms neutral
-      {
-        leftArm: "M24 28 L20 38",
-        rightArm: "M36 28 L40 38",
-        leftLeg: "M26 48 L28 62 L28 68",
-        rightLeg: "M34 48 L32 62 L32 68",
-        body: "M30 28 L30 48",
-        head: { cx: 30, cy: 20 }
-      },
-      // Frame 2 - Left leg forward, right arm forward
-      {
-        leftArm: "M24 28 L18 34",
-        rightArm: "M36 28 L42 36",
-        leftLeg: "M26 48 L20 60 L16 68",
-        rightLeg: "M34 48 L38 62 L42 68",
-        body: "M30 28 L30 48",
-        head: { cx: 30, cy: 20 }
-      },
-      // Frame 3 - Legs passing other way
-      {
-        leftArm: "M24 28 L20 38",
-        rightArm: "M36 28 L40 38",
-        leftLeg: "M26 48 L32 62 L32 68",
-        rightLeg: "M34 48 L28 62 L28 68",
-        body: "M30 28 L30 48",
-        head: { cx: 30, cy: 20 }
-      },
-    ]
-    return poses[frameNum]
-  }
-
-  const pose = getStickFigure(frame)
+  const vehicleBounceY = frame % 2 === 0 ? 0 : -0.7
+  const wheelSpokeRotation = frame * 45
 
   return (
     <div className="fixed inset-0 z-[80] flex items-start justify-center pt-32 pointer-events-none">
@@ -102,77 +60,80 @@ export function WalkingLoader({ isVisible, label, progress = null, onClose }: Wa
             <X className="h-4 w-4" />
           </button>
         ) : null}
-        {/* Walking Animation Container */}
+        {/* Vehicle Animation Container */}
         <div className="relative w-20 h-24 flex items-center justify-center">
-          {/* Ground line with moving dots */}
+          {/* Road line with moving lane marks */}
           <div className="absolute bottom-0 left-0 right-0 h-[2px] bg-border overflow-hidden">
             <div 
               className="absolute top-0 left-0 w-full h-full"
               style={{
                 background: 'repeating-linear-gradient(90deg, transparent, transparent 8px, var(--primary) 8px, var(--primary) 12px)',
-                animation: 'slideLeft 0.4s linear infinite',
+                animation: 'slideRight 0.4s linear infinite',
               }}
             />
           </div>
           
-          {/* Stick Figure */}
+          {/* Moving Vehicle */}
           <svg 
             viewBox="0 0 60 72" 
             className="w-16 h-20"
-            style={{ filter: 'drop-shadow(0 2px 4px rgba(0,0,0,0.3))' }}
+            style={{
+              filter: 'drop-shadow(0 2px 4px rgba(0,0,0,0.3))',
+              transform: `translateY(${vehicleBounceY}px)`,
+              transition: 'transform 120ms linear',
+            }}
           >
-            {/* Head */}
-            <circle 
-              cx={pose.head.cx} 
-              cy={pose.head.cy} 
-              r="8" 
-              fill="none" 
-              stroke="url(#gradient)" 
-              strokeWidth="3"
-              strokeLinecap="round"
+            {/* Vehicle Body */}
+            <path
+              d="M10 42 L14 34 Q18 26 28 26 L39 26 Q45 26 48 31 L52 36 L52 42 Z"
+              fill="url(#gradient)"
+              stroke="#0F172A"
+              strokeWidth="1.2"
             />
-            
-            {/* Body */}
-            <path 
-              d={pose.body} 
-              stroke="url(#gradient)" 
-              strokeWidth="3" 
-              strokeLinecap="round"
-              fill="none"
+
+            {/* Cabin */}
+            <path
+              d="M22 27 L29 27 L35 33 L19 33 Z"
+              fill="#E2E8F0"
+              stroke="#0F172A"
+              strokeWidth="0.9"
             />
-            
-            {/* Arms */}
-            <path 
-              d={pose.leftArm} 
-              stroke="url(#gradient)" 
-              strokeWidth="2.5" 
+
+            {/* Headlights */}
+            <circle cx="51" cy="38" r="1.3" fill="#FDE047" />
+            <rect x="10" y="37" width="1.6" height="3.2" rx="0.8" fill="#FCA5A5" />
+
+            {/* Wheels */}
+            <g>
+              <circle cx="20" cy="42" r="4.7" fill="#111827" />
+              <circle cx="20" cy="42" r="2.2" fill="#94A3B8" />
+              <path
+                d="M20 39.8 L20 44.2 M17.8 42 L22.2 42"
+                stroke="#0F172A"
+                strokeWidth="0.8"
+                strokeLinecap="round"
+                transform={`rotate(${wheelSpokeRotation} 20 42)`}
+              />
+            </g>
+            <g>
+              <circle cx="41" cy="42" r="4.7" fill="#111827" />
+              <circle cx="41" cy="42" r="2.2" fill="#94A3B8" />
+              <path
+                d="M41 39.8 L41 44.2 M38.8 42 L43.2 42"
+                stroke="#0F172A"
+                strokeWidth="0.8"
+                strokeLinecap="round"
+                transform={`rotate(${wheelSpokeRotation} 41 42)`}
+              />
+            </g>
+
+            {/* Motion streak */}
+            <path
+              d="M6 30 H11 M4 34 H10 M5 38 H9"
+              stroke="#64748B"
+              strokeWidth="1.2"
               strokeLinecap="round"
-              fill="none"
-            />
-            <path 
-              d={pose.rightArm} 
-              stroke="url(#gradient)" 
-              strokeWidth="2.5" 
-              strokeLinecap="round"
-              fill="none"
-            />
-            
-            {/* Legs */}
-            <path 
-              d={pose.leftLeg} 
-              stroke="url(#gradient)" 
-              strokeWidth="2.5" 
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              fill="none"
-            />
-            <path 
-              d={pose.rightLeg} 
-              stroke="url(#gradient)" 
-              strokeWidth="2.5" 
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              fill="none"
+              opacity="0.85"
             />
             
             {/* Gradient Definition */}
@@ -206,12 +167,12 @@ export function WalkingLoader({ isVisible, label, progress = null, onClose }: Wa
       
       {/* CSS Animation */}
       <style jsx>{`
-        @keyframes slideLeft {
+        @keyframes slideRight {
           from {
             transform: translateX(0);
           }
           to {
-            transform: translateX(-20px);
+            transform: translateX(20px);
           }
         }
       `}</style>

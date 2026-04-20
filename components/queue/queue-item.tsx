@@ -27,6 +27,20 @@ function formatTimestamp(value: string | null) {
   }).format(new Date(value))
 }
 
+function formatInferenceStatusMessage(message: string) {
+  const raw = message.trim()
+  if (!raw) {
+    return raw
+  }
+
+  const processingFramesIndex = raw.toLowerCase().indexOf("processing frames:")
+  if (processingFramesIndex >= 0) {
+    return raw.slice(processingFramesIndex)
+  }
+
+  return raw.replace(/^RT-DETR\s+(stdout|stderr):\s*/i, "")
+}
+
 function getStatusAppearance(state: UploadState) {
   switch (state) {
     case "queued":
@@ -95,6 +109,7 @@ export function QueueItem({ upload, onCancelRequest }: QueueItemProps) {
   const canCancel = upload.state === "queued" || upload.state === "processing"
   const statusText = getStatusText(upload)
   const errorDetails = upload.error ?? upload.message
+  const formattedInferenceStatus = formatInferenceStatusMessage(upload.message)
 
   const handleCopyError = async () => {
     if (!errorDetails || typeof navigator === "undefined" || !navigator.clipboard) {
@@ -185,9 +200,9 @@ export function QueueItem({ upload, onCancelRequest }: QueueItemProps) {
             </span>
           </div>
 
-          {upload.state !== "error" && upload.message ? (
+          {upload.state !== "error" && formattedInferenceStatus ? (
             <p className="mt-1 text-xs text-muted-foreground">
-              Inference status: {upload.message}
+              Inference status: {formattedInferenceStatus}
             </p>
           ) : null}
 
