@@ -23,6 +23,7 @@ import { FileVideo, Upload, Video, X } from "lucide-react"
 import { getCountingConfigChoices, uploadInferenceRequirement } from "@/lib/api"
 
 const LAST_COUNTING_CONFIG_STORAGE_KEY = "alive-last-counting-config"
+const LAST_VIDEO_FORM_VALUES_STORAGE_KEY = "alive-last-video-form-values"
 
 const HOUR_OPTIONS = Array.from({ length: 12 }, (_, index) => {
   const hour = index + 1
@@ -35,6 +36,30 @@ const MINUTE_SECOND_OPTIONS = Array.from({ length: 60 }, (_, index) => {
 })
 
 const MERIDIEM_OPTIONS = ["AM", "PM"] as const
+const MONTH_OPTIONS = [
+  { value: "01", label: "Jan" },
+  { value: "02", label: "Feb" },
+  { value: "03", label: "Mar" },
+  { value: "04", label: "Apr" },
+  { value: "05", label: "May" },
+  { value: "06", label: "Jun" },
+  { value: "07", label: "Jul" },
+  { value: "08", label: "Aug" },
+  { value: "09", label: "Sep" },
+  { value: "10", label: "Oct" },
+  { value: "11", label: "Nov" },
+  { value: "12", label: "Dec" },
+]
+const DAY_OPTIONS = Array.from({ length: 31 }, (_, index) => {
+  const day = String(index + 1).padStart(2, "0")
+  return { value: day, label: day }
+})
+const MIN_YEAR_OPTION = 2000
+const MAX_YEAR_OPTION = 2100
+const YEAR_OPTIONS = Array.from({ length: MAX_YEAR_OPTION - MIN_YEAR_OPTION + 1 }, (_, index) => {
+  const year = String(MIN_YEAR_OPTION + index)
+  return { value: year, label: year }
+})
 
 function inferGateSuffixFromLocation(locationName: string): string | null {
   const normalizedLocation = locationName.toLowerCase().trim()
@@ -122,6 +147,32 @@ function composeTwentyFourHourTime(hour12: string, minute: string, second: strin
   return `${String(hour24).padStart(2, "0")}:${String(parsedMinute).padStart(2, "0")}:${String(parsedSecond).padStart(2, "0")}`
 }
 
+function composeIsoDate(year: string, month: string, day: string) {
+  const parsedYear = Number(year)
+  const parsedMonth = Number(month)
+  const parsedDay = Number(day)
+  if (!Number.isInteger(parsedYear) || parsedYear < 1) {
+    return ""
+  }
+  if (!Number.isInteger(parsedMonth) || parsedMonth < 1 || parsedMonth > 12) {
+    return ""
+  }
+  if (!Number.isInteger(parsedDay) || parsedDay < 1 || parsedDay > 31) {
+    return ""
+  }
+
+  const candidate = new Date(parsedYear, parsedMonth - 1, parsedDay)
+  if (
+    candidate.getFullYear() !== parsedYear ||
+    candidate.getMonth() !== parsedMonth - 1 ||
+    candidate.getDate() !== parsedDay
+  ) {
+    return ""
+  }
+
+  return `${year}-${month}-${day}`
+}
+
 interface AddVideoModalProps {
   open: boolean
   onOpenChange: (open: boolean) => void
@@ -135,6 +186,65 @@ interface AddVideoModalProps {
     countingConfig?: string
     showLivePreview?: boolean
   }) => void | Promise<void>
+}
+
+interface LastVideoFormValues {
+  locationId: string
+  date: string
+  startHour: string
+  startMinute: string
+  startSecond: string
+  startMeridiem: string
+  selectedCountingConfig: string
+  showLivePreview: boolean
+}
+
+function parseIsoDateParts(value: string) {
+  const match = value.match(/^(\d{4})-(\d{2})-(\d{2})$/)
+  if (!match) {
+    return { year: "", month: "", day: "" }
+  }
+
+  return {
+    year: match[1],
+    month: match[2],
+    day: match[3],
+  }
+}
+
+function readLastVideoFormValues(): LastVideoFormValues | null {
+  if (typeof window === "undefined") {
+    return null
+  }
+
+  const raw = window.localStorage.getItem(LAST_VIDEO_FORM_VALUES_STORAGE_KEY)
+  if (!raw) {
+    return null
+  }
+
+  try {
+    const parsed = JSON.parse(raw) as Partial<LastVideoFormValues>
+    return {
+      locationId: typeof parsed.locationId === "string" ? parsed.locationId : "",
+      date: typeof parsed.date === "string" ? parsed.date : "",
+      startHour: typeof parsed.startHour === "string" ? parsed.startHour : "",
+      startMinute: typeof parsed.startMinute === "string" ? parsed.startMinute : "",
+      startSecond: typeof parsed.startSecond === "string" ? parsed.startSecond : "",
+      startMeridiem: parsed.startMeridiem === "AM" || parsed.startMeridiem === "PM" ? parsed.startMeridiem : "",
+      selectedCountingConfig: typeof parsed.selectedCountingConfig === "string" ? parsed.selectedCountingConfig : "",
+      showLivePreview: Boolean(parsed.showLivePreview),
+    }
+  } catch {
+    return null
+  }
+}
+
+function writeLastVideoFormValues(values: LastVideoFormValues) {
+  if (typeof window === "undefined") {
+    return
+  }
+
+  window.localStorage.setItem(LAST_VIDEO_FORM_VALUES_STORAGE_KEY, JSON.stringify(values))
 }
 
 const ACCEPTED_VIDEO_MIME_TYPES = new Set(["video/mp4", "video/x-msvideo", "video/avi", "video/msvideo"])
@@ -152,6 +262,9 @@ export function AddVideoModal({ open, onOpenChange, locations, initialLocationId
   const [selectedFile, setSelectedFile] = useState<File | null>(null)
   const [locationId, setLocationId] = useState("")
   const [date, setDate] = useState("")
+  const [startYear, setStartYear] = useState("")
+  const [startMonth, setStartMonth] = useState("")
+  const [startDay, setStartDay] = useState("")
   const [startTime, setStartTime] = useState("")
   const [startHour, setStartHour] = useState("")
   const [startMinute, setStartMinute] = useState("")
@@ -198,7 +311,33 @@ export function AddVideoModal({ open, onOpenChange, locations, initialLocationId
 
   useEffect(() => {
     if (open) {
-      setLocationId(initialLocationId ?? "")
+      const savedValues = readLastVideoFormValues()
+      const normalizedInitialLocationId = typeof initialLocationId === "string" && initialLocationId.trim().length > 0
+        ? initialLocationId
+        : undefined
+      const resolvedLocationId = normalizedInitialLocationId ?? savedValues?.locationId ?? ""
+      const resolvedDate = savedValues?.date ?? ""
+      const resolvedHour = savedValues?.startHour ?? ""
+      const resolvedMinute = savedValues?.startMinute ?? ""
+      const resolvedSecond = savedValues?.startSecond ?? ""
+      const resolvedMeridiem = savedValues?.startMeridiem ?? ""
+      const resolvedStartTime = composeTwentyFourHourTime(resolvedHour, resolvedMinute, resolvedSecond, resolvedMeridiem)
+
+      setLocationId(resolvedLocationId)
+      setDate(resolvedDate)
+      const dateParts = parseIsoDateParts(resolvedDate)
+      setStartYear(dateParts.year)
+      setStartMonth(dateParts.month)
+      setStartDay(dateParts.day)
+      setStartHour(resolvedHour)
+      setStartMinute(resolvedMinute)
+      setStartSecond(resolvedSecond)
+      setStartMeridiem(resolvedMeridiem)
+      setStartTime(resolvedStartTime)
+      setShowLivePreview(Boolean(savedValues?.showLivePreview))
+      if (savedValues?.selectedCountingConfig) {
+        setSelectedCountingConfig(savedValues.selectedCountingConfig)
+      }
       setSubmitError(null)
       void refreshCountingOptions()
     }
@@ -216,11 +355,39 @@ export function AddVideoModal({ open, onOpenChange, locations, initialLocationId
     [startHour, startMeridiem, startMinute, startSecond],
   )
 
+  const setDatePart = useCallback(
+    (next: { year?: string; month?: string; day?: string }) => {
+      const nextYear = next.year ?? startYear
+      const nextMonth = next.month ?? startMonth
+      const nextDay = next.day ?? startDay
+      const nextDate = composeIsoDate(nextYear, nextMonth, nextDay)
+      setDate(nextDate)
+    },
+    [startDay, startMonth, startYear],
+  )
+
   useEffect(() => {
     if (selectedCountingConfig && typeof window !== "undefined") {
       window.localStorage.setItem(LAST_COUNTING_CONFIG_STORAGE_KEY, selectedCountingConfig)
     }
   }, [selectedCountingConfig])
+
+  useEffect(() => {
+    if (!open) {
+      return
+    }
+
+    writeLastVideoFormValues({
+      locationId,
+      date,
+      startHour,
+      startMinute,
+      startSecond,
+      startMeridiem,
+      selectedCountingConfig,
+      showLivePreview,
+    })
+  }, [date, locationId, open, selectedCountingConfig, showLivePreview, startHour, startMeridiem, startMinute, startSecond])
 
   useEffect(() => {
     if (!locationId || countingOptions.length === 0) {
@@ -266,6 +433,24 @@ export function AddVideoModal({ open, onOpenChange, locations, initialLocationId
 
     return null
   }, [date, isSubmitting, locationId, selectedCountingConfig, selectedFile, startTime])
+
+  const formattedDateLabel = useMemo(() => {
+    if (!date) {
+      return "Select month, day, and year."
+    }
+
+    const parsed = new Date(`${date}T00:00:00`)
+    if (Number.isNaN(parsed.getTime())) {
+      return "Select month, day, and year."
+    }
+
+    return parsed.toLocaleDateString("en-US", {
+      weekday: "short",
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+    })
+  }, [date])
 
   const handleDrag = (e: React.DragEvent) => {
     e.preventDefault()
@@ -353,13 +538,6 @@ export function AddVideoModal({ open, onOpenChange, locations, initialLocationId
 
   const handleClose = () => {
     setSelectedFile(null)
-    setLocationId("")
-    setDate("")
-    setStartTime("")
-    setStartHour("")
-    setStartMinute("")
-    setStartSecond("")
-    setStartMeridiem("")
     setCountingConfigError(null)
     setSubmitError(null)
     setIsLoadingCountingOptions(false)
@@ -549,15 +727,71 @@ export function AddVideoModal({ open, onOpenChange, locations, initialLocationId
           {/* Date */}
           <div className="space-y-2">
             <label className="text-sm font-medium text-foreground">Start Date</label>
-            <Input 
-              type="date" 
-              value={date}
-              onChange={(e) => {
-                setSubmitError(null)
-                setDate(e.target.value)
-              }}
-              className="bg-secondary border-border text-foreground"
-            />
+            <div className="grid grid-cols-3 gap-2 sm:gap-3">
+              <Select
+                value={startMonth}
+                onValueChange={(value) => {
+                  setSubmitError(null)
+                  setStartMonth(value)
+                  setDatePart({ month: value })
+                }}
+                disabled={isSubmitting}
+              >
+                <SelectTrigger className="w-full bg-secondary border-border text-foreground">
+                  <SelectValue placeholder="Month" />
+                </SelectTrigger>
+                <SelectContent className="max-h-72 bg-card border-border">
+                  {MONTH_OPTIONS.map((option) => (
+                    <SelectItem key={option.value} value={option.value} className="text-foreground">
+                      {option.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+
+              <Select
+                value={startDay}
+                onValueChange={(value) => {
+                  setSubmitError(null)
+                  setStartDay(value)
+                  setDatePart({ day: value })
+                }}
+                disabled={isSubmitting}
+              >
+                <SelectTrigger className="w-full bg-secondary border-border text-foreground">
+                  <SelectValue placeholder="Day" />
+                </SelectTrigger>
+                <SelectContent className="max-h-72 bg-card border-border">
+                  {DAY_OPTIONS.map((option) => (
+                    <SelectItem key={option.value} value={option.value} className="text-foreground">
+                      {option.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+
+              <Select
+                value={startYear}
+                onValueChange={(value) => {
+                  setSubmitError(null)
+                  setStartYear(value)
+                  setDatePart({ year: value })
+                }}
+                disabled={isSubmitting}
+              >
+                <SelectTrigger className="w-full bg-secondary border-border text-foreground">
+                  <SelectValue placeholder="Year" />
+                </SelectTrigger>
+                <SelectContent className="max-h-72 bg-card border-border">
+                  {YEAR_OPTIONS.map((option) => (
+                    <SelectItem key={option.value} value={option.value} className="text-foreground">
+                      {option.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <p className="text-xs text-muted-foreground">{formattedDateLabel}</p>
           </div>
           
           <div className="space-y-2">
