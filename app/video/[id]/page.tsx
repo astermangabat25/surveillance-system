@@ -8,7 +8,6 @@ import { PlaybackTimeline } from "@/components/video/playback-timeline"
 import { EventFeed } from "@/components/surveillance/event-feed"
 import { AISearchBar } from "@/components/surveillance/ai-search-bar"
 import { Button } from "@/components/ui/button"
-import { Switch } from "@/components/ui/switch"
 import { AlertCircle, ArrowLeft, BarChart3, Car, Download, Gauge, Loader2, OctagonAlert, Trash2 } from "lucide-react"
 import { deleteVideo, getEvents, getLocations, getMediaUrl, getVideo, getVideoPlaybackPath, type EventRecord, type LocationRecord, type VideoDetailRecord, type VideoPedestrianTrackRecord, type VideoSeverityBucket } from "@/lib/api"
 
@@ -148,7 +147,6 @@ function VideoDetailContent({ params }: { params: Promise<{ id: string }> }) {
   const [currentTimeSeconds, setCurrentTimeSeconds] = useState(0)
   const [durationSeconds, setDurationSeconds] = useState(0)
   const [portableTimelineRows, setPortableTimelineRows] = useState<PortableTimelineRow[]>([])
-  const [showROI, setShowROI] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const videoElementRef = useRef<HTMLVideoElement | null>(null)
   const seekTokenRef = useRef(0)
@@ -192,7 +190,6 @@ function VideoDetailContent({ params }: { params: Promise<{ id: string }> }) {
   }, [id])
 
   useEffect(() => {
-    setShowROI(false)
     setCurrentTimeSeconds(0)
     setDurationSeconds(0)
     setPortableTimelineRows([])
@@ -665,8 +662,6 @@ function VideoDetailContent({ params }: { params: Promise<{ id: string }> }) {
 
   const effectiveDurationSeconds = durationSeconds > 0 ? durationSeconds : fallbackDurationSeconds
 
-  const hasLocationROI = Boolean(videoLocation?.roiCoordinates?.includePolygonsNorm?.length)
-
   const mediaUrl = video ? getMediaUrl(getVideoPlaybackPath(video)) : null
   const metricTiles = [
     {
@@ -832,19 +827,6 @@ function VideoDetailContent({ params }: { params: Promise<{ id: string }> }) {
               </div>
             )}
 
-            {hasLocationROI && (
-              <div className="flex items-center justify-between gap-4 rounded-2xl border border-border/70 bg-card/70 px-4 py-3 shadow-elevated-sm">
-                <div>
-                  <p className="text-sm font-medium text-foreground">Show ROI Outline</p>
-                  <p className="text-xs text-muted-foreground">Display the stored monitored ROI polygons over the video for alignment debugging.</p>
-                </div>
-                <div className="flex items-center gap-3">
-                  <span className="text-xs font-medium text-muted-foreground">{showROI ? "ON" : "OFF"}</span>
-                  <Switch checked={showROI} onCheckedChange={setShowROI} aria-label="Show ROI Outline" />
-                </div>
-              </div>
-            )}
-
             {/* Video Player with Bounding Boxes */}
             <VideoPlayer
               videoId={video.id}
@@ -857,7 +839,7 @@ function VideoDetailContent({ params }: { params: Promise<{ id: string }> }) {
               videoRef={videoElementRef}
               requestedSeek={requestedSeek}
               roiCoordinates={videoLocation?.roiCoordinates ?? null}
-              showROI={showROI}
+              showROI={false}
               onTimeUpdate={setCurrentTimeSeconds}
               onDurationChange={setDurationSeconds}
             />

@@ -176,6 +176,8 @@ export function AddLocationModal({ open, onOpenChange, initialData = null, onSub
   const [searchQuery, setSearchQuery] = useState("")
   const [address, setAddress] = useState("")
   const [walkableAreaM2, setWalkableAreaM2] = useState("")
+  const [roadLengthM, setRoadLengthM] = useState("")
+  const [laneCount, setLaneCount] = useState("")
   const [roiCoordinatesText, setRoiCoordinatesText] = useState("")
   const [searchError, setSearchError] = useState<string | null>(null)
   const [roiError, setRoiError] = useState<string | null>(null)
@@ -191,6 +193,8 @@ export function AddLocationModal({ open, onOpenChange, initialData = null, onSub
     setSearchQuery(nextData?.address ?? nextData?.name ?? "")
     setAddress(nextData?.address ?? "")
     setWalkableAreaM2(nextData?.walkableAreaM2 != null ? nextData.walkableAreaM2.toString() : "")
+    setRoadLengthM(nextData?.roadLengthM != null ? nextData.roadLengthM.toString() : "")
+    setLaneCount(nextData?.laneCount != null ? nextData.laneCount.toString() : "")
     setRoiCoordinatesText(nextData?.roiCoordinates ? JSON.stringify(nextData.roiCoordinates, null, 2) : "")
     setSearchError(null)
     setRoiError(null)
@@ -251,6 +255,8 @@ export function AddLocationModal({ open, onOpenChange, initialData = null, onSub
 
     let parsedROI: ROIConfiguration | null = null
     let parsedWalkableArea: number | null = null
+    let parsedRoadLengthM: number | null = null
+    let parsedLaneCount: number | null = null
 
     try {
       parsedROI = parseROIConfiguration(roiCoordinatesText)
@@ -261,6 +267,24 @@ export function AddLocationModal({ open, onOpenChange, initialData = null, onSub
         if (!Number.isFinite(parsedWalkableArea) || parsedWalkableArea <= 0) {
           throw new Error("Walkable area must be a positive number in square meters.")
         }
+      }
+
+      if (roadLengthM.trim()) {
+        parsedRoadLengthM = Number.parseFloat(roadLengthM)
+        if (!Number.isFinite(parsedRoadLengthM) || parsedRoadLengthM <= 0) {
+          throw new Error("Road length must be a positive number in meters.")
+        }
+      }
+
+      if (laneCount.trim()) {
+        parsedLaneCount = Number.parseInt(laneCount, 10)
+        if (!Number.isFinite(parsedLaneCount) || parsedLaneCount <= 0) {
+          throw new Error("Lane count must be a positive whole number.")
+        }
+      }
+
+      if ((parsedRoadLengthM == null) !== (parsedLaneCount == null)) {
+        throw new Error("Provide both road length and lane count, or leave both blank.")
       }
     } catch (error) {
       setRoiError(error instanceof Error ? error.message : "Invalid ROI configuration.")
@@ -277,6 +301,8 @@ export function AddLocationModal({ open, onOpenChange, initialData = null, onSub
         address,
         roiCoordinates: parsedROI,
         walkableAreaM2: parsedWalkableArea,
+        roadLengthM: parsedRoadLengthM,
+        laneCount: parsedLaneCount,
       })
       handleClose()
     } finally {
@@ -423,6 +449,34 @@ export function AddLocationModal({ open, onOpenChange, initialData = null, onSub
             />
             <p className="text-xs text-muted-foreground">Used for the congestion part of the Pedestrian Traffic Severity Index.</p>
           </div>
+
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <label className="text-sm font-medium text-foreground">Road Length (m)</label>
+              <Input
+                type="number"
+                step="0.01"
+                min="0"
+                placeholder="e.g., 18"
+                value={roadLengthM}
+                onChange={(e) => setRoadLengthM(e.target.value)}
+                className="bg-secondary border-border text-foreground placeholder:text-muted-foreground"
+              />
+            </div>
+            <div className="space-y-2">
+              <label className="text-sm font-medium text-foreground">Lane Count</label>
+              <Input
+                type="number"
+                step="1"
+                min="1"
+                placeholder="e.g., 2"
+                value={laneCount}
+                onChange={(e) => setLaneCount(e.target.value)}
+                className="bg-secondary border-border text-foreground placeholder:text-muted-foreground"
+              />
+            </div>
+          </div>
+          <p className="text-xs text-muted-foreground">For gate LOS fallback, provide both values. They are used when walkable area is not set.</p>
 
           <div className="space-y-2">
             <div className="flex items-center gap-2">

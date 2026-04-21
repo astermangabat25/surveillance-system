@@ -30,6 +30,8 @@ export interface EnqueuedUploadInput {
   endTime?: string
   manualDurationHours?: number
   manualDurationMinutes?: number
+  roadLengthM?: number
+  laneCount?: number
   countingConfig?: string
   showLivePreview?: boolean
 }
@@ -46,6 +48,8 @@ export interface UploadQueueItem {
   endTime: string
   manualDurationHours: number | null
   manualDurationMinutes: number | null
+  roadLengthM: number | null
+  laneCount: number | null
   countingConfig: string | null
   showLivePreview: boolean
   uploadId: string | null
@@ -157,6 +161,8 @@ function createQueuedItem(input: EnqueuedUploadInput): UploadQueueItem {
     endTime: input.endTime ?? "",
     manualDurationHours: typeof input.manualDurationHours === "number" ? input.manualDurationHours : null,
     manualDurationMinutes: typeof input.manualDurationMinutes === "number" ? input.manualDurationMinutes : null,
+    roadLengthM: typeof input.roadLengthM === "number" ? input.roadLengthM : null,
+    laneCount: typeof input.laneCount === "number" ? input.laneCount : null,
     countingConfig: input.countingConfig ?? null,
     showLivePreview: Boolean(input.showLivePreview),
     uploadId: null,
@@ -194,6 +200,8 @@ function createUploadFromHistory(status: VideoUploadStatus): UploadQueueItem {
     endTime: status.endTime ?? "",
     manualDurationHours: null,
     manualDurationMinutes: null,
+    roadLengthM: null,
+    laneCount: null,
     countingConfig: null,
     showLivePreview: false,
     uploadId: status.uploadId,
@@ -344,6 +352,8 @@ function restoreUpload(value: unknown): UploadQueueItem | null {
     endTime: upload.endTime,
     manualDurationHours: typeof upload.manualDurationHours === "number" ? upload.manualDurationHours : null,
     manualDurationMinutes: typeof upload.manualDurationMinutes === "number" ? upload.manualDurationMinutes : null,
+    roadLengthM: typeof upload.roadLengthM === "number" ? upload.roadLengthM : null,
+    laneCount: typeof upload.laneCount === "number" ? upload.laneCount : null,
     countingConfig: typeof upload.countingConfig === "string" ? upload.countingConfig : null,
     showLivePreview: Boolean(upload.showLivePreview),
     uploadId: typeof upload.uploadId === "string" ? upload.uploadId : null,
@@ -736,6 +746,8 @@ export function UploadQueueProvider({ children }: { children: ReactNode }) {
           endTime: queuedUpload.endTime || undefined,
           manualDurationHours: queuedUpload.manualDurationHours ?? undefined,
           manualDurationMinutes: queuedUpload.manualDurationMinutes ?? undefined,
+          roadLengthM: queuedUpload.roadLengthM ?? undefined,
+          laneCount: queuedUpload.laneCount ?? undefined,
           countingConfig: queuedUpload.countingConfig ?? undefined,
           showLivePreview: queuedUpload.showLivePreview,
           onProgress: (status) => {

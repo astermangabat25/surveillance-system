@@ -40,6 +40,7 @@ PTSI_OCCLUSION_WEIGHTS = {0: 1, 1: 2, 2: 3}
 PTSI_CONGESTION_WEIGHT = 0.85
 PTSI_OCCLUSION_WEIGHT = 0.15
 PTSI_ROI_TESTING_CAPACITY_PER_FULL_FRAME = 24.0
+PTSI_DEFAULT_GATE_LANE_WIDTH_M = 1.0
 SEMANTIC_MIN_SCORE = 0.18
 SEMANTIC_POSSIBLE_MATCH_SCORE = 0.28
 SEMANTIC_STRONG_MATCH_SCORE = 0.45
@@ -78,6 +79,8 @@ LOCATION_PERSISTED_FIELDS = (
     "address",
     "roiCoordinates",
     "walkableAreaM2",
+    "roadLengthM",
+    "laneCount",
 )
 SEARCH_STOPWORDS = {
     "a",
@@ -1463,6 +1466,8 @@ def seed_state() -> dict[str, Any]:
                 "address": "Ateneo de Manila University · Gate 2",
                 "roiCoordinates": None,
                 "walkableAreaM2": None,
+                "roadLengthM": None,
+                "laneCount": None,
             },
             {
                 "id": "gate-2-9",
@@ -1473,6 +1478,8 @@ def seed_state() -> dict[str, Any]:
                 "address": "Ateneo de Manila University · Gate 2.9",
                 "roiCoordinates": deepcopy(DEFAULT_EDSA_SEC_WALK_ROI),
                 "walkableAreaM2": None,
+                "roadLengthM": None,
+                "laneCount": None,
             },
             {
                 "id": "gate-3",
@@ -1483,6 +1490,8 @@ def seed_state() -> dict[str, Any]:
                 "address": "Ateneo de Manila University · Gate 3",
                 "roiCoordinates": None,
                 "walkableAreaM2": None,
+                "roadLengthM": None,
+                "laneCount": None,
             },
             {
                 "id": "gate-3-2",
@@ -1493,6 +1502,8 @@ def seed_state() -> dict[str, Any]:
                 "address": "Ateneo de Manila University · Gate 3.2",
                 "roiCoordinates": None,
                 "walkableAreaM2": None,
+                "roadLengthM": None,
+                "laneCount": None,
             },
             {
                 "id": "gate-3-5",
@@ -1503,6 +1514,8 @@ def seed_state() -> dict[str, Any]:
                 "address": "Ateneo de Manila University · Gate 3.5",
                 "roiCoordinates": None,
                 "walkableAreaM2": None,
+                "roadLengthM": None,
+                "laneCount": None,
             },
         ],
         "videos": [],
@@ -1555,6 +1568,12 @@ def load_state() -> dict[str, Any]:
             changed = True
         if "walkableAreaM2" not in location:
             location["walkableAreaM2"] = None
+            changed = True
+        if "roadLengthM" not in location:
+            location["roadLengthM"] = None
+            changed = True
+        if "laneCount" not in location:
+            location["laneCount"] = None
             changed = True
         if location.get("id") == "gate-2-9" and not location.get("roiCoordinates"):
             location["roiCoordinates"] = deepcopy(DEFAULT_EDSA_SEC_WALK_ROI)
@@ -1699,6 +1718,8 @@ def update_location(location_id: str, payload: dict[str, Any]) -> dict[str, Any]
             "address": payload.get("address", ""),
             "roiCoordinates": payload.get("roiCoordinates"),
             "walkableAreaM2": payload.get("walkableAreaM2"),
+            "roadLengthM": payload.get("roadLengthM"),
+            "laneCount": payload.get("laneCount"),
         }
     )
 
@@ -2449,13 +2470,44 @@ def _track_in_location_roi(track: dict[str, Any], location: dict[str, Any]) -> b
     return _point_in_location_roi(foot_point, location)
 
 
-def _location_walkable_area_m2(location: dict[str, Any]) -> Optional[float]:
+def _location_configured_walkable_area_m2(location: dict[str, Any]) -> Optional[float]:
     raw_area = location.get("walkableAreaM2")
     try:
         area_value = float(raw_area)
     except (TypeError, ValueError):
         return None
     return area_value if area_value > 0 else None
+
+
+def _location_road_length_m(location: dict[str, Any]) -> Optional[float]:
+    raw_value = location.get("roadLengthM")
+    try:
+        value = float(raw_value)
+    except (TypeError, ValueError):
+        return None
+    return value if value > 0 else None
+
+
+def _location_lane_count(location: dict[str, Any]) -> Optional[int]:
+    raw_value = location.get("laneCount")
+    try:
+        value = int(raw_value)
+    except (TypeError, ValueError):
+        return None
+    return value if value > 0 else None
+
+
+def _location_walkable_area_m2(location: dict[str, Any]) -> Optional[float]:
+    configured_area = _location_configured_walkable_area_m2(location)
+    if configured_area is not None:
+        return configured_area
+
+    road_length_m = _location_road_length_m(location)
+    lane_count = _location_lane_count(location)
+    if road_length_m is None or lane_count is None:
+        return None
+
+    return road_length_m * float(lane_count) * PTSI_DEFAULT_GATE_LANE_WIDTH_M
 
 
 def _location_ptsi_mode(location: dict[str, Any]) -> str:

@@ -24,6 +24,8 @@ class LocationCreate(BaseModel):
     address: str = ""
     roiCoordinates: Optional[dict[str, Any]] = None
     walkableAreaM2: Optional[float] = None
+    roadLengthM: Optional[float] = None
+    laneCount: Optional[int] = None
 
 
 class LocationRecord(LocationCreate):

@@ -24,6 +24,15 @@ import { getCountingConfigChoices, uploadInferenceRequirement } from "@/lib/api"
 
 const LAST_COUNTING_CONFIG_STORAGE_KEY = "alive-last-counting-config"
 const LAST_VIDEO_FORM_VALUES_STORAGE_KEY = "alive-last-video-form-values"
+const LAST_GATE_LOS_VALUES_STORAGE_KEY = "alive-last-gate-los-values"
+
+const GATE_DEFAULT_LOS_VALUES: Record<string, { roadLengthM: number; laneCount: number }> = {
+  g2: { roadLengthM: 18, laneCount: 2 },
+  "g2.9": { roadLengthM: 18, laneCount: 2 },
+  g3: { roadLengthM: 18, laneCount: 2 },
+  "g3.2": { roadLengthM: 18, laneCount: 2 },
+  "g3.5": { roadLengthM: 18, laneCount: 2 },
+}
 
 const HOUR_OPTIONS = Array.from({ length: 12 }, (_, index) => {
   const hour = index + 1
@@ -103,6 +112,17 @@ function inferGateSuffixFromLocation(locationName: string): string | null {
   }[gateToken] ?? null
 }
 
+function inferGateSuffixFromLocationId(locationId: string): string | null {
+  const normalized = locationId.trim().toLowerCase()
+  return {
+    "gate-2": "g2",
+    "gate-2-9": "g2.9",
+    "gate-3": "g3",
+    "gate-3-2": "g3.2",
+    "gate-3-5": "g3.5",
+  }[normalized] ?? null
+}
+
 function findGateMatchedCountingConfig(options: string[], locationName: string): string | null {
   const suffix = inferGateSuffixFromLocation(locationName)
   if (!suffix) {
@@ -176,13 +196,15 @@ function composeIsoDate(year: string, month: string, day: string) {
 interface AddVideoModalProps {
   open: boolean
   onOpenChange: (open: boolean) => void
-  locations: Array<{ id: string; name: string }>
+  locations: Array<{ id: string; name: string; roadLengthM?: number | null; laneCount?: number | null }>
   initialLocationId?: string
   onAddVideo?: (data: {
     file: File
     locationId: string
     date: string
     startTime: string
+    roadLengthM?: number
+    laneCount?: number
     countingConfig?: string
     showLivePreview?: boolean
   }) => void | Promise<void>
@@ -197,6 +219,13 @@ interface LastVideoFormValues {
   startMeridiem: string
   selectedCountingConfig: string
   showLivePreview: boolean
+}
+
+interface LastGateLosValues {
+  [gateSuffix: string]: {
+    roadLengthM: number
+    laneCount: number
+  }
 }
 
 function parseIsoDateParts(value: string) {
@@ -247,6 +276,83 @@ function writeLastVideoFormValues(values: LastVideoFormValues) {
   window.localStorage.setItem(LAST_VIDEO_FORM_VALUES_STORAGE_KEY, JSON.stringify(values))
 }
 
+function readLastGateLosValues(): LastGateLosValues {
+  if (typeof window === "undefined") {
+    return {}
+  }
+
+  try {
+    const raw = window.localStorage.getItem(LAST_GATE_LOS_VALUES_STORAGE_KEY)
+    if (!raw) {
+      return {}
+    }
+
+    const parsed = JSON.parse(raw) as Record<string, unknown>
+    const normalized: LastGateLosValues = {}
+
+    for (const [key, value] of Object.entries(parsed)) {
+      if (!value || typeof value !== "object") {
+        continue
+      }
+
+      const record = value as { roadLengthM?: unknown; laneCount?: unknown }
+      const roadLengthM = Number(record.roadLengthM)
+      const laneCount = Number(record.laneCount)
+
+      if (Number.isFinite(roadLengthM) && roadLengthM > 0 && Number.isFinite(laneCount) && laneCount > 0) {
+        normalized[key] = {
+          roadLengthM,
+          laneCount: Math.round(laneCount),
+        }
+      }
+    }
+
+    return normalized
+  } catch {
+    return {}
+  }
+}
+
+function writeLastGateLosValues(values: LastGateLosValues) {
+  if (typeof window === "undefined") {
+    return
+  }
+
+  window.localStorage.setItem(LAST_GATE_LOS_VALUES_STORAGE_KEY, JSON.stringify(values))
+}
+
+function resolveGateLosDefaults(location: { id: string; name: string; roadLengthM?: number | null; laneCount?: number | null } | undefined) {
+  if (!location) {
+    return { roadLengthM: "", laneCount: "" }
+  }
+
+  const gateSuffix = inferGateSuffixFromLocationId(location.id) ?? inferGateSuffixFromLocation(location.name)
+  const lastGateValues = readLastGateLosValues()
+
+  if (gateSuffix && lastGateValues[gateSuffix]) {
+    return {
+      roadLengthM: String(lastGateValues[gateSuffix].roadLengthM),
+      laneCount: String(lastGateValues[gateSuffix].laneCount),
+    }
+  }
+
+  if (location.roadLengthM != null && location.laneCount != null) {
+    return {
+      roadLengthM: String(location.roadLengthM),
+      laneCount: String(location.laneCount),
+    }
+  }
+
+  if (gateSuffix && GATE_DEFAULT_LOS_VALUES[gateSuffix]) {
+    return {
+      roadLengthM: String(GATE_DEFAULT_LOS_VALUES[gateSuffix].roadLengthM),
+      laneCount: String(GATE_DEFAULT_LOS_VALUES[gateSuffix].laneCount),
+    }
+  }
+
+  return { roadLengthM: "", laneCount: "" }
+}
+
 const ACCEPTED_VIDEO_MIME_TYPES = new Set(["video/mp4", "video/x-msvideo", "video/avi", "video/msvideo"])
 
 function isAcceptedVideoFile(file: File) {
@@ -270,6 +376,8 @@ export function AddVideoModal({ open, onOpenChange, locations, initialLocationId
   const [startMinute, setStartMinute] = useState("")
   const [startSecond, setStartSecond] = useState("")
   const [startMeridiem, setStartMeridiem] = useState("")
+  const [roadLengthM, setRoadLengthM] = useState("")
+  const [laneCount, setLaneCount] = useState("")
   const [countingOptions, setCountingOptions] = useState<string[]>([])
   const [selectedCountingConfig, setSelectedCountingConfig] = useState("")
   const [countingConfigError, setCountingConfigError] = useState<string | null>(null)
@@ -334,6 +442,10 @@ export function AddVideoModal({ open, onOpenChange, locations, initialLocationId
       setStartSecond(resolvedSecond)
       setStartMeridiem(resolvedMeridiem)
       setStartTime(resolvedStartTime)
+      const selectedLocation = locations.find((location) => location.id === resolvedLocationId)
+      const defaults = resolveGateLosDefaults(selectedLocation)
+      setRoadLengthM(defaults.roadLengthM)
+      setLaneCount(defaults.laneCount)
       setShowLivePreview(Boolean(savedValues?.showLivePreview))
       if (savedValues?.selectedCountingConfig) {
         setSelectedCountingConfig(savedValues.selectedCountingConfig)
@@ -341,7 +453,7 @@ export function AddVideoModal({ open, onOpenChange, locations, initialLocationId
       setSubmitError(null)
       void refreshCountingOptions()
     }
-  }, [initialLocationId, open, refreshCountingOptions])
+  }, [initialLocationId, locations, open, refreshCountingOptions])
 
   const setClockPart = useCallback(
     (next: { hour?: string; minute?: string; second?: string; meridiem?: string }) => {
@@ -406,6 +518,17 @@ export function AddVideoModal({ open, onOpenChange, locations, initialLocationId
     }
   }, [countingOptions, locationId, locations, selectedCountingConfig])
 
+  useEffect(() => {
+    if (!open || !locationId) {
+      return
+    }
+
+    const selectedLocation = locations.find((location) => location.id === locationId)
+    const defaults = resolveGateLosDefaults(selectedLocation)
+    setRoadLengthM(defaults.roadLengthM)
+    setLaneCount(defaults.laneCount)
+  }, [locationId, locations, open])
+
   const submitDisabledReason = useMemo(() => {
     if (isSubmitting) {
       return "Adding video to the queue..."
@@ -431,8 +554,12 @@ export function AddVideoModal({ open, onOpenChange, locations, initialLocationId
       return "Choose a counting config to continue."
     }
 
+    if ((roadLengthM.trim() && !laneCount.trim()) || (!roadLengthM.trim() && laneCount.trim())) {
+      return "Provide both road length and lane count together."
+    }
+
     return null
-  }, [date, isSubmitting, locationId, selectedCountingConfig, selectedFile, startTime])
+  }, [date, isSubmitting, laneCount, locationId, roadLengthM, selectedCountingConfig, selectedFile, startTime])
 
   const formattedDateLabel = useMemo(() => {
     if (!date) {
@@ -516,6 +643,43 @@ export function AddVideoModal({ open, onOpenChange, locations, initialLocationId
   const handleSubmit = async () => {
     if (!selectedFile || !locationId || !date || !startTime || !selectedCountingConfig || isSubmitting) return
 
+    let parsedRoadLengthM: number | undefined
+    let parsedLaneCount: number | undefined
+
+    if (roadLengthM.trim() || laneCount.trim()) {
+      if (!roadLengthM.trim() || !laneCount.trim()) {
+        setSubmitError("Provide both road length and lane count together.")
+        return
+      }
+
+      const roadLength = Number.parseFloat(roadLengthM)
+      const lanes = Number.parseInt(laneCount, 10)
+
+      if (!Number.isFinite(roadLength) || roadLength <= 0) {
+        setSubmitError("Road length must be a positive number.")
+        return
+      }
+
+      if (!Number.isFinite(lanes) || lanes <= 0) {
+        setSubmitError("Lane count must be a positive whole number.")
+        return
+      }
+
+      parsedRoadLengthM = roadLength
+      parsedLaneCount = lanes
+
+      const selectedLocation = locations.find((location) => location.id === locationId)
+      const gateSuffix = selectedLocation
+        ? (inferGateSuffixFromLocationId(selectedLocation.id) ?? inferGateSuffixFromLocation(selectedLocation.name))
+        : null
+
+      if (gateSuffix) {
+        const existingValues = readLastGateLosValues()
+        existingValues[gateSuffix] = { roadLengthM: roadLength, laneCount: lanes }
+        writeLastGateLosValues(existingValues)
+      }
+    }
+
     setSubmitError(null)
     setIsSubmitting(true)
 
@@ -525,6 +689,8 @@ export function AddVideoModal({ open, onOpenChange, locations, initialLocationId
         locationId,
         date,
         startTime,
+        roadLengthM: parsedRoadLengthM,
+        laneCount: parsedLaneCount,
         countingConfig: selectedCountingConfig,
         showLivePreview,
       })
@@ -569,7 +735,7 @@ export function AddVideoModal({ open, onOpenChange, locations, initialLocationId
     >
       <DialogContent
         showCloseButton={!isSubmitting}
-        className="bg-card border-border sm:max-w-md"
+        className="bg-card border-border sm:max-w-2xl"
         onEscapeKeyDown={(event) => {
           if (isSubmitting) {
             event.preventDefault()
@@ -591,12 +757,12 @@ export function AddVideoModal({ open, onOpenChange, locations, initialLocationId
           </DialogDescription>
         </DialogHeader>
         
-        <div className="space-y-4 py-4">
+        <div className="space-y-2.5 py-2.5">
           {/* File Upload Area */}
           <div className="space-y-2">
             <label className="text-sm font-medium text-foreground">Video File</label>
             <div
-              className={`relative border-2 border-dashed rounded-lg p-6 transition-colors ${
+              className={`relative rounded-lg border-2 border-dashed p-3 transition-colors ${
                 dragActive 
                   ? "border-primary bg-primary/5" 
                     : selectedFile
@@ -617,12 +783,12 @@ export function AddVideoModal({ open, onOpenChange, locations, initialLocationId
               />
 
               {selectedFile ? (
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-lg bg-primary/10 flex items-center justify-center">
-                    <FileVideo className="w-5 h-5 text-primary" />
+                <div className="flex items-center gap-2">
+                  <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/10">
+                    <FileVideo className="h-4 w-4 text-primary" />
                   </div>
                   <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium text-foreground truncate">{selectedFile.name}</p>
+                    <p className="truncate text-sm font-medium text-foreground">{selectedFile.name}</p>
                     <p className="text-xs text-muted-foreground">
                       {(selectedFile.size / (1024 * 1024)).toFixed(2)} MB
                     </p>
@@ -643,37 +809,71 @@ export function AddVideoModal({ open, onOpenChange, locations, initialLocationId
                   className="flex flex-col items-center gap-2 cursor-pointer"
                   onClick={() => !isSubmitting && fileInputRef.current?.click()}
                 >
-                  <div className="w-12 h-12 rounded-full bg-muted flex items-center justify-center">
-                    <Upload className="w-6 h-6 text-muted-foreground" />
+                  <div className="flex h-9 w-9 items-center justify-center rounded-full bg-muted">
+                    <Upload className="h-4 w-4 text-muted-foreground" />
                   </div>
                   <div className="text-center">
-                    <p className="text-sm font-medium text-foreground">Drop video here or click to upload</p>
-                    <p className="text-xs text-muted-foreground mt-1">Supports MP4 and AVI formats</p>
+                    <p className="text-xs font-medium text-foreground">Drop video here or click to upload</p>
+                    <p className="mt-0.5 text-[11px] text-muted-foreground">Supports MP4 and AVI formats</p>
                   </div>
                 </div>
               )}
             </div>
           </div>
 
-          {/* Location Dropdown */}
-          <div className="space-y-2">
-            <label className="text-sm font-medium text-foreground">Location</label>
-            <Select value={locationId} onValueChange={(value) => {
-              setSubmitError(null)
-              setLocationId(value)
-            }}>
-              <SelectTrigger className="bg-secondary border-border text-foreground">
-                <SelectValue placeholder="Select location" />
-              </SelectTrigger>
-              <SelectContent className="bg-card border-border">
-                {locations.map((loc) => (
-                  <SelectItem key={loc.id} value={loc.id} className="text-foreground">
-                    {loc.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+          <div className="grid gap-3 sm:grid-cols-3">
+            <div className="space-y-1.5">
+              <label className="text-xs font-medium text-foreground">Location</label>
+              <Select value={locationId} onValueChange={(value) => {
+                setSubmitError(null)
+                setLocationId(value)
+              }}>
+                <SelectTrigger className="bg-secondary border-border text-foreground">
+                  <SelectValue placeholder="Select location" />
+                </SelectTrigger>
+                <SelectContent className="bg-card border-border">
+                  {locations.map((loc) => (
+                    <SelectItem key={loc.id} value={loc.id} className="text-foreground">
+                      {loc.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-xs font-medium text-foreground">Road Length (m)</label>
+              <Input
+                type="number"
+                step="0.01"
+                min="0"
+                value={roadLengthM}
+                onChange={(event) => {
+                  setSubmitError(null)
+                  setRoadLengthM(event.target.value)
+                }}
+                placeholder="e.g., 18"
+                disabled={isSubmitting}
+                className="bg-secondary border-border text-foreground"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-xs font-medium text-foreground">Lane Count</label>
+              <Input
+                type="number"
+                step="1"
+                min="1"
+                value={laneCount}
+                onChange={(event) => {
+                  setSubmitError(null)
+                  setLaneCount(event.target.value)
+                }}
+                placeholder="e.g., 2"
+                disabled={isSubmitting}
+                className="bg-secondary border-border text-foreground"
+              />
+            </div>
           </div>
+          <p className="text-[11px] text-muted-foreground">Road/Lane prefills use last-used gate values, then saved location values, then gate defaults.</p>
 
           <div className="space-y-2">
             <div className="flex items-center justify-between gap-2">
@@ -718,7 +918,7 @@ export function AddVideoModal({ open, onOpenChange, locations, initialLocationId
                 ))}
               </SelectContent>
             </Select>
-            <p className="text-xs text-muted-foreground">
+            <p className="text-[11px] text-muted-foreground">
               Choose an existing counting-line config or upload a new .json file.
             </p>
             {countingConfigError ? <p className="text-xs text-destructive">{countingConfigError}</p> : null}
@@ -791,7 +991,7 @@ export function AddVideoModal({ open, onOpenChange, locations, initialLocationId
                 </SelectContent>
               </Select>
             </div>
-            <p className="text-xs text-muted-foreground">{formattedDateLabel}</p>
+            <p className="text-[11px] text-muted-foreground">{formattedDateLabel}</p>
           </div>
           
           <div className="space-y-2">
@@ -881,28 +1081,28 @@ export function AddVideoModal({ open, onOpenChange, locations, initialLocationId
                 </SelectContent>
               </Select>
             </div>
-            <p className="text-xs text-muted-foreground">Select hour, minute, and second for precise start timing.</p>
+            <p className="text-[11px] text-muted-foreground">Select hour, minute, and second for precise start timing.</p>
           </div>
 
-          <div className="rounded-xl border border-border bg-secondary/40 p-4">
+          <div className="rounded-xl border border-border bg-secondary/40 p-3">
             <div className="flex items-start justify-between gap-4">
               <div>
                 <p className="text-sm font-medium text-foreground">Coverage Window</p>
-                <p className="mt-1 text-xs text-muted-foreground">
+                <p className="mt-1 text-[11px] text-muted-foreground">
                   The upload starts at {startTime || "the selected start time"}. End time is computed from the processed video duration.
                 </p>
               </div>
             </div>
           </div>
 
-          <div className="rounded-xl border border-border bg-secondary/40 p-4">
+          <div className="rounded-xl border border-border bg-secondary/40 p-3">
             <div className="flex items-start justify-between gap-4">
               <div>
                 <div className="flex items-center gap-2 text-sm font-medium text-foreground">
                   <Video className="h-4 w-4 text-primary" />
                   Live Preview Window
                 </div>
-                <p className="mt-1 text-xs text-muted-foreground">
+                <p className="mt-1 text-[11px] text-muted-foreground">
                   Show RT-DETR live frames in an OpenCV window while processing. Turn off to run fully in background.
                 </p>
               </div>

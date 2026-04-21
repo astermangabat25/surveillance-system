@@ -224,6 +224,8 @@ export default function SurveillancePage() {
     locationId: string
     date: string
     startTime: string
+    roadLengthM?: number
+    laneCount?: number
     countingConfig?: string
     showLivePreview?: boolean
   }) => {
@@ -399,7 +401,12 @@ export default function SurveillancePage() {
       <AddVideoModal 
         open={videoModalOpen}
         onOpenChange={handleVideoModalChange}
-        locations={locations.map((location) => ({ id: location.id, name: location.name }))}
+        locations={locations.map((location) => ({
+          id: location.id,
+          name: location.name,
+          roadLengthM: location.roadLengthM,
+          laneCount: location.laneCount,
+        }))}
         initialLocationId={selectedUploadLocationId}
         onAddVideo={handleAddVideo}
       />

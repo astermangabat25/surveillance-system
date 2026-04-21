@@ -27,6 +27,8 @@ export interface LocationRecord {
   address: string
   roiCoordinates?: ROIConfiguration | null
   walkableAreaM2?: number | null
+  roadLengthM?: number | null
+  laneCount?: number | null
   videos: VideoCard[]
 }
 
@@ -462,6 +464,8 @@ export function uploadVideo(payload: {
   endTime?: string
   manualDurationHours?: number
   manualDurationMinutes?: number
+  roadLengthM?: number
+  laneCount?: number
   countingConfig?: string
   showLivePreview?: boolean
   onProgress?: (status: VideoUploadStatus) => void
@@ -480,6 +484,12 @@ export function uploadVideo(payload: {
   }
   if (typeof payload.manualDurationMinutes === "number") {
     formData.set("manualDurationMinutes", String(payload.manualDurationMinutes))
+  }
+  if (typeof payload.roadLengthM === "number") {
+    formData.set("roadLengthM", String(payload.roadLengthM))
+  }
+  if (typeof payload.laneCount === "number") {
+    formData.set("laneCount", String(payload.laneCount))
   }
   if (payload.countingConfig) {
     formData.set("countingConfig", payload.countingConfig)

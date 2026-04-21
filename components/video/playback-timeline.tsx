@@ -32,6 +32,16 @@ const SEVERITY_STYLES: Record<SeverityLevel, { label: string; fill: string }> = 
   heavy: { label: "LOS E-F", fill: "rgba(239, 68, 68, 0.58)" },
 }
 
+function losFromScore(score?: number | null): string | null {
+  if (typeof score !== "number" || !Number.isFinite(score)) return null
+  if (score < 15) return "LOS A"
+  if (score < 33) return "LOS B"
+  if (score < 50) return "LOS C"
+  if (score < 66) return "LOS D"
+  if (score < 85) return "LOS E"
+  return "LOS F"
+}
+
 function formatDuration(seconds: number) {
   const totalSeconds = Math.max(0, Math.floor(seconds))
   const hours = Math.floor(totalSeconds / 3600)
@@ -120,6 +130,7 @@ export function PlaybackTimeline({
   onSeek,
 }: PlaybackTimelineProps) {
   const [zoomPreset, setZoomPreset] = useState<ZoomPresetId>("full")
+  const [hoveredOffsetSeconds, setHoveredOffsetSeconds] = useState<number | null>(null)
   const safeDuration = Number.isFinite(durationSeconds) && durationSeconds > 0 ? durationSeconds : 0
   const safeCurrentTime = Math.max(0, Math.min(currentTimeSeconds, safeDuration || currentTimeSeconds))
   const activeZoomConfig = ZOOM_PRESETS.find((preset) => preset.id === zoomPreset) ?? ZOOM_PRESETS[0]
@@ -175,13 +186,16 @@ export function PlaybackTimeline({
 
         const scoreLabel = typeof bucket.score === "number" ? ` • score ${bucket.score.toFixed(1)}` : ""
         return {
+          startOffset,
+          endOffset,
           left: projected.left,
           width: projected.width,
           severity: bucket.severity,
+          score: typeof bucket.score === "number" ? bucket.score : null,
           title: `${SEVERITY_STYLES[bucket.severity].label}${scoreLabel} • ${formatRangeLabel(startOffset, endOffset)}`,
         }
       })
-      .filter((bucket): bucket is { left: number; width: number; severity: SeverityLevel; title: string } => bucket !== null)
+      .filter((bucket): bucket is { startOffset: number; endOffset: number; left: number; width: number; severity: SeverityLevel; score: number | null; title: string } => bucket !== null)
   }, [backendSeverityBuckets, safeDuration, zoomWindowDuration, zoomWindowEnd, zoomWindowStart])
 
   const fallbackSeverityBuckets = useMemo(() => {
@@ -194,9 +208,12 @@ export function PlaybackTimeline({
     if (classifiedEvents.length === 0) {
       return [
         {
+          startOffset: 0,
+          endOffset: safeDuration,
           left: 0,
           width: 100,
           severity: "neutral" as const,
+          score: null,
           title: `No LOS samples • ${formatRangeLabel(0, safeDuration)}`,
         },
       ]
@@ -236,16 +253,29 @@ export function PlaybackTimeline({
         if (!projected) return null
 
         return {
+          startOffset: segment.startOffset,
+          endOffset: segment.endOffset,
           left: projected.left,
           width: projected.width,
           severity: segment.severity,
+          score: null,
           title: `${SEVERITY_STYLES[segment.severity].label} • ${formatRangeLabel(segment.startOffset, segment.endOffset)}`,
         }
       })
-      .filter((segment): segment is { left: number; width: number; severity: SeverityLevel; title: string } => segment !== null)
+      .filter((segment): segment is { startOffset: number; endOffset: number; left: number; width: number; severity: SeverityLevel; score: number | null; title: string } => segment !== null)
   }, [safeDuration, timedEvents, zoomWindowDuration, zoomWindowEnd, zoomWindowStart])
 
   const severityBuckets = summarizedSeverityBuckets.length > 0 ? summarizedSeverityBuckets : fallbackSeverityBuckets
+
+  const hoveredSeverity = useMemo(() => {
+    if (hoveredOffsetSeconds === null || severityBuckets.length === 0) {
+      return null
+    }
+
+    return severityBuckets.find(
+      (bucket) => hoveredOffsetSeconds >= bucket.startOffset && hoveredOffsetSeconds <= bucket.endOffset,
+    ) ?? null
+  }, [hoveredOffsetSeconds, severityBuckets])
 
   const detectionBars = useMemo(() => {
     if (!zoomWindowDuration || timedEvents.length === 0) return []
@@ -377,6 +407,13 @@ export function PlaybackTimeline({
     onSeek(zoomWindowStart + ((relativeX / rect.width) * zoomWindowDuration))
   }
 
+  const handleHover = (clientX: number, target: HTMLDivElement) => {
+    if (!zoomWindowDuration) return
+    const rect = target.getBoundingClientRect()
+    const relativeX = Math.max(0, Math.min(clientX - rect.left, rect.width))
+    setHoveredOffsetSeconds(zoomWindowStart + ((relativeX / rect.width) * zoomWindowDuration))
+  }
+
   return (
     <div className="rounded-2xl border border-border bg-card p-5 shadow-elevated-sm">
       <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
@@ -412,6 +449,11 @@ export function PlaybackTimeline({
         <span className="ml-auto rounded-full bg-secondary px-2.5 py-1 text-[11px] text-muted-foreground">
           Window {formatDuration(zoomWindowStart)} - {formatDuration(zoomWindowEnd)}
         </span>
+        {hoveredOffsetSeconds !== null && (
+          <span className="rounded-full border border-border bg-secondary/60 px-2.5 py-1 text-[11px] text-foreground">
+            Hover {formatDuration(hoveredOffsetSeconds)} • {hoveredSeverity ? (losFromScore(hoveredSeverity.score) ?? SEVERITY_STYLES[hoveredSeverity.severity].label) : "No LOS"}
+          </span>
+        )}
       </div>
 
       {safeDuration > 0 && zoomWindowDuration > 0 ? (
@@ -419,11 +461,12 @@ export function PlaybackTimeline({
           <div
             className="relative mb-2 h-16 cursor-pointer overflow-hidden rounded-xl border border-border bg-secondary/70"
             onClick={(event) => handleSeek(event.clientX, event.currentTarget)}
+            onMouseMove={(event) => handleHover(event.clientX, event.currentTarget)}
+            onMouseLeave={() => setHoveredOffsetSeconds(null)}
           >
             {severityBuckets.map((bucket) => (
               <div
-                key={`${bucket.left}-${bucket.severity}`}
-                title={bucket.title}
+                key={`${bucket.startOffset}-${bucket.endOffset}-${bucket.severity}`}
                 className="absolute inset-y-0"
                 style={{ left: `${bucket.left}%`, width: `${bucket.width}%`, backgroundColor: SEVERITY_STYLES[bucket.severity].fill }}
               />
@@ -435,7 +478,6 @@ export function PlaybackTimeline({
               <button
                 key={`search-${cluster.start}-${cluster.count}`}
                 type="button"
-                title={cluster.title}
                 aria-label={cluster.title}
                 className="absolute bottom-1 z-10 h-2 rounded-full border border-cyan-200/80 bg-cyan-400/65 shadow-[0_0_0_1px_rgba(34,211,238,0.12)]"
                 style={{ left: `${cluster.left}%`, width: `${cluster.widthPercent}%`, transform: "translateX(-50%)" }}
@@ -459,7 +501,6 @@ export function PlaybackTimeline({
                 <button
                   key={`marker-${bar.second}`}
                   type="button"
-                  title={bar.title}
                   aria-label={bar.title}
                   className={`absolute bottom-1 z-20 w-1.5 -translate-x-1/2 rounded-[2px] shadow-sm transition-transform hover:scale-y-110 ${markerStyle}`}
                   style={{
@@ -495,7 +536,6 @@ export function PlaybackTimeline({
                 key={marker.id}
                 className="absolute -translate-x-1/2 truncate"
                 style={{ left: `${marker.leftPercent}%`, maxWidth: "90px" }}
-                title={marker.label}
               >
                 {marker.label}
               </span>

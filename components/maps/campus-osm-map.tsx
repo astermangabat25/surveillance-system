@@ -44,6 +44,7 @@ interface CampusOsmMapProps {
   startTime?: string
   zoomLevel?: number
   selectedLocationId?: string
+  showLosDetails?: boolean
   className?: string
 }
 
@@ -577,6 +578,7 @@ export function CampusOsmMap({
   startTime,
   zoomLevel,
   selectedLocationId,
+  showLosDetails = true,
   className,
 }: CampusOsmMapProps) {
   const mapHostRef = useRef<HTMLDivElement | null>(null)
@@ -655,12 +657,12 @@ export function CampusOsmMap({
         lat: landmark.lat,
         lng: landmark.lng,
         los: markerLos,
-        markerColor: colorForLos(resolvedLos),
+        markerColor: showLosDetails ? colorForLos(resolvedLos) : "#0EA5E9",
         isSelected,
         sourceLabel,
       }
     })
-  }, [focusTime, occlusionData, selectedLocationId, startTime, timeRange])
+  }, [focusTime, occlusionData, selectedLocationId, showLosDetails, startTime, timeRange])
 
   useEffect(() => {
     if (!mapHostRef.current) {
@@ -754,7 +756,7 @@ export function CampusOsmMap({
           fillOpacity: markerData.isSelected ? 1 : 0.95,
         }).addTo(activeMap)
 
-        const tooltipContent = `<strong>${markerData.los}</strong>`
+        const tooltipContent = `<strong>${showLosDetails ? markerData.los : markerData.name}</strong>`
         marker.bindTooltip(tooltipContent, {
           direction: "top",
           offset: [0, -8],
@@ -763,7 +765,17 @@ export function CampusOsmMap({
           className: "campus-osm-marker-label",
         })
 
-        const popupContent = buildMarkerPopupContent(markerData, dateLabel, mapContextLabel)
+        const popupContent = showLosDetails
+          ? buildMarkerPopupContent(markerData, dateLabel, mapContextLabel)
+          : (() => {
+              const wrapper = document.createElement("div")
+              wrapper.style.fontFamily = "Inter, system-ui, sans-serif"
+              const title = document.createElement("div")
+              title.style.fontWeight = "700"
+              title.textContent = markerData.name
+              wrapper.appendChild(title)
+              return wrapper
+            })()
         marker.bindPopup(popupContent)
         marker.on("mouseover", () => marker.openTooltip())
         marker.on("click", () => {
@@ -782,26 +794,28 @@ export function CampusOsmMap({
       resizeObserver?.disconnect()
       map?.remove()
     }
-  }, [dateLabel, mapContextLabel, markers])
+  }, [dateLabel, mapContextLabel, markers, showLosDetails])
 
   return (
     <div className={`${className ?? "h-72 w-full rounded-xl"} relative overflow-hidden`}>
       <div ref={mapHostRef} className="h-full w-full" />
-      <div className="pointer-events-none absolute bottom-2 right-2 rounded-md border border-slate-300/60 bg-white/90 px-2 py-1 text-[10px] text-slate-700 shadow-sm backdrop-blur">
-        <div className="mb-1 font-semibold">LOS Heat</div>
-        <div className="flex items-center gap-1">
-          {LOS_GRADES.map((grade) => (
-            <span
-              key={grade}
-              className="inline-flex h-4 w-4 items-center justify-center rounded-full text-[9px] font-bold text-white"
-              style={{ backgroundColor: colorForLos(grade) }}
-              title={`LOS ${grade}`}
-            >
-              {grade}
-            </span>
-          ))}
+      {showLosDetails && (
+        <div className="pointer-events-none absolute bottom-2 right-2 rounded-md border border-slate-300/60 bg-white/90 px-2 py-1 text-[10px] text-slate-700 shadow-sm backdrop-blur">
+          <div className="mb-1 font-semibold">LOS Heat</div>
+          <div className="flex items-center gap-1">
+            {LOS_GRADES.map((grade) => (
+              <span
+                key={grade}
+                className="inline-flex h-4 w-4 items-center justify-center rounded-full text-[9px] font-bold text-white"
+                style={{ backgroundColor: colorForLos(grade) }}
+                title={`LOS ${grade}`}
+              >
+                {grade}
+              </span>
+            ))}
+          </div>
         </div>
-      </div>
+      )}
       <style>{`
         .campus-osm-marker-label {
           background: rgba(15, 23, 42, 0.88);

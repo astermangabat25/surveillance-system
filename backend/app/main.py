@@ -140,6 +140,29 @@ def _manual_duration_seconds(hours: Optional[int], minutes: Optional[int]) -> Op
     return total_seconds if total_seconds > 0 else None
 
 
+def _apply_upload_los_overrides(location_id: str, road_length_m: Optional[float], lane_count: Optional[int]) -> None:
+    if road_length_m is None and lane_count is None:
+        return
+
+    if road_length_m is None or lane_count is None:
+        raise HTTPException(status_code=400, detail="Provide both roadLengthM and laneCount together.")
+
+    if road_length_m <= 0:
+        raise HTTPException(status_code=400, detail="roadLengthM must be a positive number.")
+
+    if lane_count <= 0:
+        raise HTTPException(status_code=400, detail="laneCount must be a positive integer.")
+
+    state = store.load_state()
+    location = next((item for item in state.get("locations", []) if item.get("id") == location_id), None)
+    if location is None:
+        raise HTTPException(status_code=400, detail="Invalid locationId")
+
+    location["roadLengthM"] = float(road_length_m)
+    location["laneCount"] = int(lane_count)
+    store.save_state(state)
+
+
 def _extract_tracking_progress_percent(message: str) -> Optional[int]:
     # Matches tqdm-like fragments such as "1%|" or "56%|########".
     match = re.search(r"\b(100|[1-9]?\d)%\|", message)
@@ -395,6 +418,8 @@ async def upload_video(
     endTime: Optional[str] = Form(None),
     manualDurationHours: Optional[int] = Form(None),
     manualDurationMinutes: Optional[int] = Form(None),
+    roadLengthM: Optional[float] = Form(None),
+    laneCount: Optional[int] = Form(None),
     countingConfig: Optional[str] = Form(None),
     showLivePreview: bool = Form(False),
     uploadId: Optional[str] = Form(None),
@@ -409,6 +434,8 @@ async def upload_video(
     safe_name = safe_filename(file.filename or "video.mp4")
     raw_target = store.RAW_VIDEOS_DIR / f"{uuid4().hex[:8]}-{safe_name}"
     raw_target.write_bytes(await file.read())
+
+    _apply_upload_los_overrides(locationId, roadLengthM, laneCount)
 
     selected_counting_config = str(countingConfig or "").strip() or None
     if selected_counting_config:

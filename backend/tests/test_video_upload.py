@@ -1553,6 +1553,8 @@ def test_update_and_delete_location_cascade_to_related_records(monkeypatch, tmp_
                     ],
                 },
                 "walkableAreaM2": 54.5,
+                "roadLengthM": 18.0,
+                "laneCount": 2,
             },
         )
 
@@ -1561,6 +1563,8 @@ def test_update_and_delete_location_cascade_to_related_records(monkeypatch, tmp_
     assert updated_body["name"] == "Gate 2.9 Updated"
     assert updated_body["latitude"] == 14.64
     assert updated_body["walkableAreaM2"] == 54.5
+    assert updated_body["roadLengthM"] == 18.0
+    assert updated_body["laneCount"] == 2
     assert updated_body["roiCoordinates"]["referenceSize"] == [1920, 1080]
     assert updated_body["videos"][0]["id"] == "video-1"
 
@@ -1570,6 +1574,8 @@ def test_update_and_delete_location_cascade_to_related_records(monkeypatch, tmp_
     assert updated_state["videos"][0]["gpsLat"] == 14.64
     assert updated_state["videos"][0]["gpsLng"] == 121.08
     assert updated_location["walkableAreaM2"] == 54.5
+    assert updated_location["roadLengthM"] == 18.0
+    assert updated_location["laneCount"] == 2
     assert updated_location["roiCoordinates"]["includePolygonsNorm"][0][0] == [0.2, 0.2]
     assert {event["location"] for event in updated_state["events"]} == {"Gate 2.9 Updated"}
 
@@ -4565,6 +4571,19 @@ def test_dashboard_los_returns_no_data_after_short_video_footage_window(monkeypa
     assert isinstance(ten_bucket["los"], float)
     assert 1.0 <= float(ten_bucket["los"]) <= 6.0
     assert twelve_bucket["los"] is None
+
+
+def test_ptsi_score_breakdown_uses_road_length_and_lane_count_when_walkable_area_is_missing() -> None:
+    breakdown = store._ptsi_score_breakdown(
+        visible_count=6,
+        location={"walkableAreaM2": None, "roadLengthM": 18.0, "laneCount": 2},
+        occlusion_value=0.0,
+    )
+
+    assert breakdown["mode"] == "strict-fhwa"
+    assert breakdown["walkableAreaM2"] == pytest.approx(36.0, abs=0.001)
+    assert breakdown["spacePerPedestrian"] == pytest.approx(6.0, abs=0.001)
+    assert breakdown["los"] == "A"
 
 
 @pytest.mark.parametrize(
