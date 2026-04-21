@@ -135,7 +135,6 @@ export default function DashboardPage() {
   const [vehicleChartType, setVehicleChartType] = useState<"line" | "bar">("line")
   const [losChartType, setLosChartType] = useState<"line" | "bar">("bar")
   const [allGatesVehicleChartType, setAllGatesVehicleChartType] = useState<"line" | "bar">("line")
-  const [allGatesLosChartType, setAllGatesLosChartType] = useState<"line" | "bar">("bar")
   const [inOutChartType, setInOutChartType] = useState<"line" | "bar">("line")
   const [modelDialogOpen, setModelDialogOpen] = useState(false)
   const [modelFile, setModelFile] = useState<File | null>(null)
@@ -842,8 +841,7 @@ export default function DashboardPage() {
               loading={dashboardLoading}
               onTimeSelect={handleAnalyticsZoom}
               onResetZoom={handleResetZoom}
-              chartType={allGatesLosChartType}
-              onChartTypeChange={setAllGatesLosChartType}
+              chartType="bar"
               legendPosition="top"
             />
             <OcclusionTrendsChart
