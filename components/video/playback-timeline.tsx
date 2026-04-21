@@ -213,7 +213,7 @@ export function PlaybackTimeline({
           left: 0,
           width: 100,
           severity: "neutral" as const,
-          score: null,
+          score: null as number | null,
           title: `No LOS samples • ${formatRangeLabel(0, safeDuration)}`,
         },
       ]
@@ -258,7 +258,7 @@ export function PlaybackTimeline({
           left: projected.left,
           width: projected.width,
           severity: segment.severity,
-          score: null,
+          score: null as number | null,
           title: `${SEVERITY_STYLES[segment.severity].label} • ${formatRangeLabel(segment.startOffset, segment.endOffset)}`,
         }
       })

@@ -11,36 +11,8 @@ import {
 } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import { Textarea } from "@/components/ui/textarea"
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
-import { Info, Loader2, MapPin, Search } from "lucide-react"
-import { searchLocations, type LocationPayload, type ROIConfiguration } from "@/lib/api"
-
-const ROI_PROMPT_TEMPLATE = `I am going to paste CVAT polygon coordinates for one camera/location. Please convert them into the exact JSON format required by my application.
-
-Rules:
-1. Normalize x by image width.
-2. Normalize y by image height.
-3. Keep 6 decimal places.
-4. Output valid JSON only.
-5. Do not add explanations, markdown, comments, or extra text.
-6. Treat all polygons I provide as walkable include polygons unless I explicitly say otherwise.
-7. The output format must be exactly:
-
-{
-  "referenceSize": [WIDTH, HEIGHT],
-  "includePolygonsNorm": [
-    [[x1, y1], [x2, y2], [x3, y3]],
-    [[x1, y1], [x2, y2], [x3, y3], [x4, y4]]
-  ]
-}
-
-Image size:
-WIDTH = 1920
-HEIGHT = 1080
-
-Here are the raw CVAT coordinates:
-[PASTE CVAT POLYGON COORDINATES HERE]`
+import { Loader2, MapPin, Search } from "lucide-react"
+import { searchLocations, type LocationPayload } from "@/lib/api"
 
 const SEARCHABLE_LOCATIONS: Array<{
   aliases: string[]
@@ -94,72 +66,22 @@ function findFallbackMatch(normalizedQuery: string) {
   return SEARCHABLE_LOCATIONS.find(({ aliases }) => aliases.some((alias) => normalizedQuery.includes(alias) || alias.includes(normalizedQuery)))
 }
 
-function parseROIConfiguration(value: string): ROIConfiguration | null {
-  const trimmed = value.trim()
-  if (!trimmed) {
-    return null
-  }
-
-  let parsed: unknown
-  try {
-    parsed = JSON.parse(trimmed)
-  } catch {
-    throw new Error("ROI JSON must be valid JSON.")
-  }
-
-  if (!parsed || typeof parsed !== "object") {
-    throw new Error("ROI JSON must be an object.")
-  }
-
-  const record = parsed as Record<string, unknown>
-  const referenceSize = record.referenceSize
-  const includePolygonsNorm = record.includePolygonsNorm
-
-  if (
-    !Array.isArray(referenceSize) ||
-    referenceSize.length !== 2 ||
-    referenceSize.some((entry) => typeof entry !== "number" || !Number.isFinite(entry) || entry <= 0)
-  ) {
-    throw new Error("ROI JSON must include a numeric referenceSize like [1920, 1080].")
-  }
-
-  if (!Array.isArray(includePolygonsNorm) || includePolygonsNorm.length === 0) {
-    throw new Error("ROI JSON must include at least one polygon in includePolygonsNorm.")
-  }
-
-  const polygons = includePolygonsNorm.map((polygon) => {
-    if (!Array.isArray(polygon) || polygon.length < 3) {
-      throw new Error("Each ROI polygon must contain at least 3 normalized points.")
-    }
-
-    return polygon.map((point) => {
-      if (!Array.isArray(point) || point.length !== 2) {
-        throw new Error("Each ROI point must be a two-number array like [0.25, 0.98].")
-      }
-
-      const [x, y] = point
-      if (
-        typeof x !== "number" ||
-        typeof y !== "number" ||
-        !Number.isFinite(x) ||
-        !Number.isFinite(y) ||
-        x < 0 ||
-        x > 1 ||
-        y < 0 ||
-        y > 1
-      ) {
-        throw new Error("ROI points must use normalized coordinates between 0 and 1.")
-      }
-
-      return [x, y] as [number, number]
-    })
-  })
-
-  return {
-    referenceSize: [referenceSize[0] as number, referenceSize[1] as number],
-    includePolygonsNorm: polygons,
-  }
+const GATE_DESCRIPTIONS: Record<string, string> = {
+  "gate 2": "Main vehicular entry/exit along EDSA. 26.3 m road, 3 lanes.",
+  "gate 2.9": "Side service gate between Gate 2 and Gate 3. 60 m road, 2 lanes.",
+  "gate 3": "Primary north gate near the Administration Building. 45.3 m road, 3 lanes.",
+  "gate 3.2": "Secondary north gate adjacent to Gate 3. 20 m road, 2 lanes.",
+  "gate 3.5": "Narrow pedestrian-priority gate near the Chapel. 20.6 m road, 1 lane.",
 }
+
+function inferGateDescription(name: string): string {
+  const normalized = name.toLowerCase().trim()
+  for (const [key, desc] of Object.entries(GATE_DESCRIPTIONS)) {
+    if (normalized.includes(key)) return desc
+  }
+  return ""
+}
+
 
 interface AddLocationModalProps {
   open: boolean
@@ -178,9 +100,8 @@ export function AddLocationModal({ open, onOpenChange, initialData = null, onSub
   const [walkableAreaM2, setWalkableAreaM2] = useState("")
   const [roadLengthM, setRoadLengthM] = useState("")
   const [laneCount, setLaneCount] = useState("")
-  const [roiCoordinatesText, setRoiCoordinatesText] = useState("")
   const [searchError, setSearchError] = useState<string | null>(null)
-  const [roiError, setRoiError] = useState<string | null>(null)
+  const [validationError, setValidationError] = useState<string | null>(null)
   const [isSearching, setIsSearching] = useState(false)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const isEditing = Boolean(initialData)
@@ -189,16 +110,17 @@ export function AddLocationModal({ open, onOpenChange, initialData = null, onSub
     setName(nextData?.name ?? "")
     setLatitude(nextData ? nextData.latitude.toString() : "")
     setLongitude(nextData ? nextData.longitude.toString() : "")
-    setDescription(nextData?.description ?? "")
+    setDescription(nextData?.description ?? (nextData?.name ? inferGateDescription(nextData.name) : ""))
     setSearchQuery(nextData?.address ?? nextData?.name ?? "")
     setAddress(nextData?.address ?? "")
     setWalkableAreaM2(nextData?.walkableAreaM2 != null ? nextData.walkableAreaM2.toString() : "")
     setRoadLengthM(nextData?.roadLengthM != null ? nextData.roadLengthM.toString() : "")
     setLaneCount(nextData?.laneCount != null ? nextData.laneCount.toString() : "")
-    setRoiCoordinatesText(nextData?.roiCoordinates ? JSON.stringify(nextData.roiCoordinates, null, 2) : "")
     setSearchError(null)
-    setRoiError(null)
+    setValidationError(null)
   }, [])
+
+
 
   useEffect(() => {
     if (!open) return
@@ -253,15 +175,11 @@ export function AddLocationModal({ open, onOpenChange, initialData = null, onSub
   const handleSubmit = async () => {
     if (!name || !latitude || !longitude || isSubmitting) return
 
-    let parsedROI: ROIConfiguration | null = null
     let parsedWalkableArea: number | null = null
     let parsedRoadLengthM: number | null = null
     let parsedLaneCount: number | null = null
 
     try {
-      parsedROI = parseROIConfiguration(roiCoordinatesText)
-      setRoiError(null)
-
       if (walkableAreaM2.trim()) {
         parsedWalkableArea = Number.parseFloat(walkableAreaM2)
         if (!Number.isFinite(parsedWalkableArea) || parsedWalkableArea <= 0) {
@@ -287,7 +205,7 @@ export function AddLocationModal({ open, onOpenChange, initialData = null, onSub
         throw new Error("Provide both road length and lane count, or leave both blank.")
       }
     } catch (error) {
-      setRoiError(error instanceof Error ? error.message : "Invalid ROI configuration.")
+      setValidationError(error instanceof Error ? error.message : "Invalid input.")
       return
     }
 
@@ -299,7 +217,7 @@ export function AddLocationModal({ open, onOpenChange, initialData = null, onSub
         longitude: parseFloat(longitude),
         description,
         address,
-        roiCoordinates: parsedROI,
+        roiCoordinates: null,
         walkableAreaM2: parsedWalkableArea,
         roadLengthM: parsedRoadLengthM,
         laneCount: parsedLaneCount,
@@ -314,6 +232,7 @@ export function AddLocationModal({ open, onOpenChange, initialData = null, onSub
     resetForm(null)
     setIsSearching(false)
     setSearchError(null)
+    setValidationError(null)
     onOpenChange(false)
   }
 
@@ -382,9 +301,15 @@ export function AddLocationModal({ open, onOpenChange, initialData = null, onSub
           <div className="space-y-2">
             <label className="text-sm font-medium text-foreground">Location Name</label>
             <Input 
-              placeholder="e.g., Gate 1 Walkway" 
+              placeholder="e.g., Gate 2" 
               value={name}
-              onChange={(e) => setName(e.target.value)}
+              onChange={(e) => {
+                const next = e.target.value
+                setName(next)
+                // Auto-populate description from gate name if currently blank or auto-set
+                const autoDesc = inferGateDescription(next)
+                if (autoDesc) setDescription(autoDesc)
+              }}
               className="bg-secondary border-border text-foreground placeholder:text-muted-foreground"
             />
           </div>
@@ -476,40 +401,8 @@ export function AddLocationModal({ open, onOpenChange, initialData = null, onSub
               />
             </div>
           </div>
-          <p className="text-xs text-muted-foreground">For gate LOS fallback, provide both values. They are used when walkable area is not set.</p>
-
-          <div className="space-y-2">
-            <div className="flex items-center gap-2">
-              <label className="text-sm font-medium text-foreground">Pedestrian ROI JSON (Optional)</label>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <button
-                    type="button"
-                    aria-label="Show ROI JSON prompt help"
-                    className="rounded-full text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                  >
-                    <Info className="h-4 w-4" />
-                  </button>
-                </TooltipTrigger>
-                <TooltipContent side="top" align="start" sideOffset={8} className="max-w-[min(32rem,calc(100vw-2rem))] rounded-xl px-3 py-3 text-left">
-                  <div className="space-y-2">
-                    <p className="text-[11px] font-medium">Copy this prompt for AI ROI conversion:</p>
-                    <pre className="smooth-scrollbar max-h-72 overflow-y-auto whitespace-pre-wrap rounded-lg bg-background/15 p-3 font-mono text-[10px] leading-relaxed text-background/95 select-all">
-                      {ROI_PROMPT_TEMPLATE}
-                    </pre>
-                  </div>
-                </TooltipContent>
-              </Tooltip>
-            </div>
-            <Textarea
-              placeholder='{"referenceSize":[1920,1080],"includePolygonsNorm":[[[0.24,0.98],[0.99,0.99],[0.22,0.09]]]}'
-              value={roiCoordinatesText}
-              onChange={(e) => setRoiCoordinatesText(e.target.value)}
-              className="min-h-32 bg-secondary font-mono text-xs border-border text-foreground placeholder:text-muted-foreground"
-            />
-            <p className="text-xs text-muted-foreground">Only pedestrian foot-points inside these normalized polygons will count toward PTSI.</p>
-            {roiError && <p className="text-xs text-destructive">{roiError}</p>}
-          </div>
+          <p className="text-xs text-muted-foreground">For LOS calculations, provide both road length and lane count together.</p>
+          {validationError && <p className="text-xs text-destructive">{validationError}</p>}
         </div>
 
         <DialogFooter className="shrink-0 px-6 pb-6 pt-2">

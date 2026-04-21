@@ -27,11 +27,11 @@ const LAST_VIDEO_FORM_VALUES_STORAGE_KEY = "alive-last-video-form-values"
 const LAST_GATE_LOS_VALUES_STORAGE_KEY = "alive-last-gate-los-values"
 
 const GATE_DEFAULT_LOS_VALUES: Record<string, { roadLengthM: number; laneCount: number }> = {
-  g2: { roadLengthM: 18, laneCount: 2 },
-  "g2.9": { roadLengthM: 18, laneCount: 2 },
-  g3: { roadLengthM: 18, laneCount: 2 },
-  "g3.2": { roadLengthM: 18, laneCount: 2 },
-  "g3.5": { roadLengthM: 18, laneCount: 2 },
+  g2: { roadLengthM: 26.3, laneCount: 3 },
+  "g2.9": { roadLengthM: 60, laneCount: 2 },
+  g3: { roadLengthM: 45.3, laneCount: 3 },
+  "g3.2": { roadLengthM: 20, laneCount: 2 },
+  "g3.5": { roadLengthM: 20.6, laneCount: 1 },
 }
 
 const HOUR_OPTIONS = Array.from({ length: 12 }, (_, index) => {
@@ -327,21 +327,6 @@ function resolveGateLosDefaults(location: { id: string; name: string; roadLength
   }
 
   const gateSuffix = inferGateSuffixFromLocationId(location.id) ?? inferGateSuffixFromLocation(location.name)
-  const lastGateValues = readLastGateLosValues()
-
-  if (gateSuffix && lastGateValues[gateSuffix]) {
-    return {
-      roadLengthM: String(lastGateValues[gateSuffix].roadLengthM),
-      laneCount: String(lastGateValues[gateSuffix].laneCount),
-    }
-  }
-
-  if (location.roadLengthM != null && location.laneCount != null) {
-    return {
-      roadLengthM: String(location.roadLengthM),
-      laneCount: String(location.laneCount),
-    }
-  }
 
   if (gateSuffix && GATE_DEFAULT_LOS_VALUES[gateSuffix]) {
     return {
@@ -873,7 +858,7 @@ export function AddVideoModal({ open, onOpenChange, locations, initialLocationId
               />
             </div>
           </div>
-          <p className="text-[11px] text-muted-foreground">Road/Lane prefills use last-used gate values, then saved location values, then gate defaults.</p>
+
 
           <div className="space-y-2">
             <div className="flex items-center justify-between gap-2">

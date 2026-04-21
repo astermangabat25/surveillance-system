@@ -7,6 +7,8 @@ import type { LucideIcon } from "lucide-react"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import type { EventRecord } from "@/lib/api"
 
+const EVENT_FEED_LIMIT = 50
+
 interface EventFeedProps {
   filteredVideoId?: string
   events?: EventRecord[]
@@ -36,16 +38,18 @@ export function EventFeed({ filteredVideoId, events = [], loading = false, selec
       ? events
       : events.filter((event) => event.type === "detection" && resolveVehicleType(event) === selectedVehicleType)
 
-    if (filteredVideoId) {
-      return [...filteredEvents].sort((left, right) => {
-        const leftOffset = typeof left.offsetSeconds === "number" ? left.offsetSeconds : Number.POSITIVE_INFINITY
-        const rightOffset = typeof right.offsetSeconds === "number" ? right.offsetSeconds : Number.POSITIVE_INFINITY
-        return leftOffset - rightOffset
-      })
-    }
+    const sorted = filteredVideoId
+      ? [...filteredEvents].sort((left, right) => {
+          const leftOffset = typeof left.offsetSeconds === "number" ? left.offsetSeconds : Number.POSITIVE_INFINITY
+          const rightOffset = typeof right.offsetSeconds === "number" ? right.offsetSeconds : Number.POSITIVE_INFINITY
+          return leftOffset - rightOffset
+        })
+      : [...filteredEvents].reverse()
 
-    return [...filteredEvents].reverse()
+    // Limit to EVENT_FEED_LIMIT when not inside a specific video
+    return filteredVideoId ? sorted : sorted.slice(0, EVENT_FEED_LIMIT)
   }, [events, filteredVideoId, selectedVehicleType])
+
 
   const handleEventSelect = (event: EventRecord) => {
     if (onEventSelect) {
@@ -71,7 +75,9 @@ export function EventFeed({ filteredVideoId, events = [], loading = false, selec
       <div className="px-4 py-3 border-b border-border">
         <h3 className="text-sm font-medium text-foreground">Event Feed</h3>
         <p className="text-xs text-muted-foreground mt-0.5">
-          {filteredVideoId ? "Click an event to seek within this recording" : "Open detections directly in the relevant footage"}
+          {filteredVideoId
+            ? "Click an event to seek within this recording."
+            : `Showing the ${EVENT_FEED_LIMIT} most recent detections. Click to open the relevant footage.`}
         </p>
         <div className="mt-3">
           <Select value={selectedVehicleType} onValueChange={setSelectedVehicleType}>

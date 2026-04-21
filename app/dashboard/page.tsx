@@ -56,6 +56,7 @@ import {
 } from "@/lib/api"
 
 const TIME_RANGE_OPTIONS = [
+  { value: "whole-day", label: "Whole day (24h)" },
   { value: "12h", label: "12 hours" },
   { value: "6h", label: "6 hours" },
   { value: "4h", label: "4 hours" },
@@ -127,12 +128,14 @@ const pickPreferredLocationId = (locations: LocationRecord[], date: string): str
 export default function DashboardPage() {
   const { settledUploadsVersion } = useUploadQueue()
   const [selectedDate, setSelectedDate] = useState("")
-  const [timeRange, setTimeRange] = useState("12h")
+  const [timeRange, setTimeRange] = useState("whole-day")
   const [startTime, setStartTime] = useState("06:00")
   const [focusTime, setFocusTime] = useState<string | undefined>(undefined)
   const [zoomLevel, setZoomLevel] = useState(0)
   const [vehicleChartType, setVehicleChartType] = useState<"line" | "bar">("line")
   const [losChartType, setLosChartType] = useState<"line" | "bar">("bar")
+  const [allGatesVehicleChartType, setAllGatesVehicleChartType] = useState<"line" | "bar">("line")
+  const [allGatesLosChartType, setAllGatesLosChartType] = useState<"line" | "bar">("bar")
   const [inOutChartType, setInOutChartType] = useState<"line" | "bar">("line")
   const [modelDialogOpen, setModelDialogOpen] = useState(false)
   const [modelFile, setModelFile] = useState<File | null>(null)
@@ -749,15 +752,18 @@ export default function DashboardPage() {
         <div className="grid grid-cols-1 gap-6 xl:grid-cols-[65%_35%]">
           <div className="space-y-6">
             <PedestrianChart
-              title={`Vehicle Count (${selectedLocationName})`}
-              description="Cumulative vehicle count for the currently selected gate over the selected timeline."
+              title={selectedLocationId ? `Vehicle Count – ${selectedLocationName}` : "Vehicle Count"}
+              description={
+                selectedLocationId
+                  ? `Cumulative vehicle count for ${selectedLocationName} over the selected time window.`
+                  : "Select a gate to view its vehicle count trend."
+              }
               timeRange={timeRange}
               selectedDate={selectedDate}
               data={traffic?.series ?? []}
               metricKey="cumulativeUniquePedestrians"
               metricLabel="Vehicle Count"
               seriesColor="#22C55E"
-              locationTotals={traffic?.locationTotals ?? []}
               bucketMinutes={traffic?.bucketMinutes ?? 60}
               zoomLevel={traffic?.zoomLevel ?? 0}
               canZoomIn={traffic?.canZoomIn ?? false}
@@ -771,30 +777,12 @@ export default function DashboardPage() {
               onChartTypeChange={setVehicleChartType}
             />
             <PedestrianChart
-              title="Vehicle Count (All gates)"
-              description="Overlapping gate-wise cumulative vehicle count for the selected date and time window."
-              timeRange={timeRange}
-              selectedDate={selectedDate}
-              data={trafficByLocation?.series ?? []}
-              metricKey="cumulativeUniquePedestrians"
-              metricLabel="Vehicle Count"
-              seriesColor="#22C55E"
-              bucketMinutes={trafficByLocation?.bucketMinutes ?? 60}
-              zoomLevel={trafficByLocation?.zoomLevel ?? 0}
-              canZoomIn={trafficByLocation?.canZoomIn ?? false}
-              focusTime={trafficByLocation?.focusTime}
-              windowStart={trafficByLocation?.windowStart}
-              windowEnd={trafficByLocation?.windowEnd}
-              loading={dashboardLoading}
-              onTimeSelect={handleAnalyticsZoom}
-              onResetZoom={handleResetZoom}
-              chartType="line"
-              legendPosition="top"
-              useLosLineColors={false}
-            />
-            <PedestrianChart
-              title="LOS"
-              description="Level of Service trend for the selected location across the chosen time window."
+              title={selectedLocationId ? `LOS – ${selectedLocationName}` : "LOS"}
+              description={
+                selectedLocationId
+                  ? `Level of Service trend for ${selectedLocationName} across the selected time window.`
+                  : "Select a gate from the filter above to view its Level of Service trend."
+              }
               timeRange={timeRange}
               selectedDate={selectedDate}
               data={losTraffic?.series ?? []}
@@ -812,6 +800,51 @@ export default function DashboardPage() {
               onResetZoom={handleResetZoom}
               chartType={losChartType}
               onChartTypeChange={setLosChartType}
+            />
+            <PedestrianChart
+              title="Vehicle Count (All Gates)"
+              description="Gate-by-gate cumulative vehicle count for the selected date and time window."
+              timeRange={timeRange}
+              selectedDate={selectedDate}
+              data={trafficByLocation?.series ?? []}
+              metricKey="cumulativeUniquePedestrians"
+              metricLabel="Vehicle Count"
+              seriesColor="#22C55E"
+              bucketMinutes={trafficByLocation?.bucketMinutes ?? 60}
+              zoomLevel={trafficByLocation?.zoomLevel ?? 0}
+              canZoomIn={trafficByLocation?.canZoomIn ?? false}
+              focusTime={trafficByLocation?.focusTime}
+              windowStart={trafficByLocation?.windowStart}
+              windowEnd={trafficByLocation?.windowEnd}
+              loading={dashboardLoading}
+              onTimeSelect={handleAnalyticsZoom}
+              onResetZoom={handleResetZoom}
+              chartType={allGatesVehicleChartType}
+              onChartTypeChange={setAllGatesVehicleChartType}
+              legendPosition="top"
+              useLosLineColors={false}
+            />
+            <PedestrianChart
+              title="LOS (All Gates)"
+              description="Gate-by-gate Level of Service trend for the selected date and time window."
+              timeRange={timeRange}
+              selectedDate={selectedDate}
+              data={trafficByLocation?.series ?? []}
+              metricKey="los"
+              metricLabel="LOS"
+              seriesColor="#06B6D4"
+              bucketMinutes={trafficByLocation?.bucketMinutes ?? 60}
+              zoomLevel={trafficByLocation?.zoomLevel ?? 0}
+              canZoomIn={trafficByLocation?.canZoomIn ?? false}
+              focusTime={trafficByLocation?.focusTime}
+              windowStart={trafficByLocation?.windowStart}
+              windowEnd={trafficByLocation?.windowEnd}
+              loading={dashboardLoading}
+              onTimeSelect={handleAnalyticsZoom}
+              onResetZoom={handleResetZoom}
+              chartType={allGatesLosChartType}
+              onChartTypeChange={setAllGatesLosChartType}
+              legendPosition="top"
             />
             <OcclusionTrendsChart
               timeRange={timeRange}

@@ -5,16 +5,18 @@ import { Video, Wifi } from "lucide-react"
 
 interface VideoThumbnailProps {
   id: string
+  label?: string
   location: string
   timestamp: string
   date: string
+  startTime?: string
   pedestrianCount: number
   mediaUrl?: string | null
   rawPath?: string | null
   processedPath?: string | null
 }
 
-export function VideoThumbnail({ id, location, timestamp, date, pedestrianCount, mediaUrl, rawPath, processedPath }: VideoThumbnailProps) {
+export function VideoThumbnail({ id, label, location, timestamp, date, startTime, pedestrianCount, mediaUrl, rawPath, processedPath }: VideoThumbnailProps) {
   const statusLabel = rawPath ? "Uploaded" : "Sample"
   const previewLabel = processedPath ? "Processed view" : rawPath ? "Raw view" : "Preview unavailable"
 
@@ -56,7 +58,7 @@ export function VideoThumbnail({ id, location, timestamp, date, pedestrianCount,
 
       {/* Bottom Info */}
       <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/90 to-transparent p-4">
-        <p className="text-sm font-semibold text-white">{location}</p>
+        <p className="text-sm font-semibold text-white truncate">{label ?? location}</p>
         <p className="text-xs text-white/70">{date} • {timestamp}</p>
         <p className="mt-1 text-[11px] text-white/60">{previewLabel}</p>
       </div>

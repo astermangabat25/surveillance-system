@@ -646,9 +646,7 @@ def get_dashboard_traffic(
     zoomLevel: int = 0,
     locationId: Optional[str] = None,
 ) -> dict[str, object]:
-    # `locationId` is accepted by the API for forward compatibility,
-    # but current store aggregation signature does not consume it.
-    return store.dashboard_traffic(date, timeRange, focusTime, zoomLevel, startTime)
+    return store.dashboard_traffic(date, timeRange, focusTime, zoomLevel, startTime, locationId)
 
 
 @app.get("/api/dashboard/traffic-by-location", response_model=schemas.TrafficByLocationResponse)

@@ -44,6 +44,8 @@ interface PedestrianChartProps {
   useLosLineColors?: boolean
 }
 
+import React from "react"
+
 const SERIES_COLORS = ["#22C55E", "#06B6D4", "#3B82F6", "#F59E0B", "#A855F7"]
 const RESERVED_SERIES_KEYS = new Set(["id", "time", "cumulativeUniquePedestrians", "averageVisiblePedestrians", "los"])
 const LOS_COLOR_MAP: Record<string, string> = {
@@ -77,11 +79,11 @@ const LOS_TICKS = [1, 2, 3, 4, 5, 6]
 function losYAxisDomainForChart(chartKind: "bar" | "line" | "area") {
   if (chartKind === "bar") {
     // Keep zero baseline so LOS=A bars (value 1) render with visible height.
-    return [0, 6] as const
+    return [0, 6]
   }
 
   // Add headroom so LOS=A points are not clipped to the lower axis edge.
-  return [0.5, 6.5] as const
+  return [0.5, 6.5]
 }
 
 type LineDotProps = {
@@ -105,6 +107,7 @@ function lineDotKey(seriesKey: string, variant: "dot" | "activeDot", props: Line
 
 function formatTimeRangeLabel(timeRange: string) {
   const labels: Record<string, string> = {
+    "whole-day": "whole day",
     "12h": "12 hours",
     "6h": "6 hours",
     "4h": "4 hours",
@@ -235,7 +238,7 @@ export function PedestrianChart({
     ? lineColorBySeriesKey
     : Object.fromEntries(locationSeries.map((series) => [series.key, series.color]))
 
-  const showLocationBreakdown = metricKey === "cumulativeUniquePedestrians" && locationSeries.length > 0
+  const showLocationBreakdown = (metricKey === "cumulativeUniquePedestrians" || metricKey === "los") && locationSeries.length > 0
   const isLosMetric = metricKey === "los"
   const nonNullMetricPointCount = data.reduce((count, point) => {
     const value = point[metricKey]
@@ -249,6 +252,22 @@ export function PedestrianChart({
     count: item.totalPedestrians,
     color: SERIES_COLORS[index % SERIES_COLORS.length],
   }))
+
+  const processedData = React.useMemo(() => {
+    if (!isLosMetric || !showLocationBreakdown) return data;
+    return data.map(point => {
+      const newPoint = { ...point };
+      for (const series of locationSeries) {
+        const losVal = point[`${series.key}__los`];
+        if (typeof losVal === "string" && LOS_SEVERITY_ORDER[losVal] !== undefined) {
+          // Convert categorical letter (A-F) to 1-6 rank for charting.
+          // Note: LOS_SEVERITY_ORDER maps A->0 so +1 to make it 1-indexed.
+          newPoint[`${series.key}__losRank`] = LOS_SEVERITY_ORDER[losVal] + 1;
+        }
+      }
+      return newPoint;
+    });
+  }, [data, isLosMetric, showLocationBreakdown, locationSeries]);
 
   const subtitle = zoomLevel > 0
     ? `Zoom level ${zoomLevel} · ${windowStart ?? focusTime ?? "--"}–${windowEnd ?? "--"}`
@@ -330,7 +349,7 @@ export function PedestrianChart({
           <ResponsiveContainer width="100%" height="100%">
             {showLocationBreakdown ? (
               chartType === "bar" ? (
-                <BarChart data={data} margin={chartMargin} onClick={handleChartClick}>
+                <BarChart data={processedData} margin={chartMargin} onClick={handleChartClick}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#27272A" vertical={false} />
                   <XAxis
                     dataKey="id"
@@ -344,16 +363,19 @@ export function PedestrianChart({
                     stroke="#71717A"
                     tick={{ fill: "#71717A", fontSize: 12 }}
                     axisLine={{ stroke: "#27272A" }}
+                    domain={isLosMetric ? losYAxisDomainForChart("bar") : undefined}
+                    ticks={isLosMetric ? LOS_TICKS : undefined}
+                    tickFormatter={isLosMetric ? (value) => LOS_LABEL_BY_RANK[Number(value)] ?? String(value) : undefined}
                     label={{ value: metricLabel, angle: -90, position: "insideLeft", fill: "#71717A", fontSize: 12 }}
                   />
                   <Tooltip content={<CustomTooltip metricKey={metricKey} />} />
                   <Legend {...legendProps} formatter={(value) => <span className="text-sm text-foreground">{value}</span>} />
                   {locationSeries.map((series) => (
-                    <Bar key={series.key} dataKey={series.key} name={series.key} fill={series.color} radius={[4, 4, 0, 0]} />
+                    <Bar key={series.key} dataKey={isLosMetric ? `${series.key}__losRank` : series.key} name={series.key} fill={series.color} radius={[4, 4, 0, 0]} />
                   ))}
                 </BarChart>
               ) : (
-                <LineChart data={data} margin={chartMargin} onClick={handleChartClick}>
+                <LineChart data={processedData} margin={chartMargin} onClick={handleChartClick}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#27272A" vertical={false} />
                   <XAxis
                     dataKey="id"
@@ -367,6 +389,9 @@ export function PedestrianChart({
                     stroke="#71717A"
                     tick={{ fill: "#71717A", fontSize: 12 }}
                     axisLine={{ stroke: "#27272A" }}
+                    domain={isLosMetric ? losYAxisDomainForChart("line") : undefined}
+                    ticks={isLosMetric ? LOS_TICKS : undefined}
+                    tickFormatter={isLosMetric ? (value) => LOS_LABEL_BY_RANK[Number(value)] ?? String(value) : undefined}
                     label={{ value: metricLabel, angle: -90, position: "insideLeft", fill: "#71717A", fontSize: 12 }}
                   />
                   <Tooltip content={<CustomTooltip metricKey={metricKey} />} />
@@ -375,12 +400,14 @@ export function PedestrianChart({
                     <Line
                       key={series.key}
                       type="monotone"
-                      dataKey={series.key}
+                      dataKey={isLosMetric ? `${series.key}__losRank` : series.key}
                       name={series.key}
                       stroke={resolvedLineColorBySeriesKey[series.key] ?? series.color}
                       strokeWidth={2.5}
                       dot={(props: LineDotProps) => {
-                        const value = props?.payload?.[series.key]
+                        // isLosMetric uses the rank payload value instead of cumulative ped value.
+                        const dataField = isLosMetric ? `${series.key}__losRank` : series.key;
+                        const value = props?.payload?.[dataField];
                         const hasRenderableValue =
                           typeof value === "number" &&
                           Number.isFinite(value) &&
@@ -388,7 +415,7 @@ export function PedestrianChart({
                           Number.isFinite(props.cy)
 
                         if (!hasRenderableValue) {
-                          return null
+                          return <></>
                         }
 
                         const losValue = props?.payload?.[`${series.key}__los`]

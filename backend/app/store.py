@@ -3686,8 +3686,19 @@ def dashboard_traffic(
     focus_time: Optional[str] = None,
     zoom_level: int = 0,
     start_time: Optional[str] = None,
+    location_id: Optional[str] = None,
 ) -> dict[str, Any]:
-    state, resolved_date, videos, events = _filtered_dashboard_records(date)
+    state, resolved_date, all_videos, all_events = _filtered_dashboard_records(date)
+    selected_location_id = str(location_id or "").strip()
+
+    if selected_location_id:
+        videos = [video for video in all_videos if video.get("locationId") == selected_location_id]
+        video_ids = {video["id"] for video in videos}
+        events = [event for event in all_events if event.get("videoId") in video_ids]
+    else:
+        videos = all_videos
+        events = all_events
+
     pedestrian_tracks = _filtered_pedestrian_tracks(state, videos)
     samples, first_seen_by_track = _build_analytics_samples(videos, events, pedestrian_tracks)
     observation_times = [sample["observedAt"] for sample in samples]
