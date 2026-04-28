@@ -97,12 +97,18 @@ function lineDotKey(seriesKey: string, variant: "dot" | "activeDot", props: Line
   const payloadId = props.payload?.id
   const pointId = typeof payloadId === "string" || typeof payloadId === "number" ? String(payloadId) : null
   const pointTime = typeof props.payload?.time === "string" ? props.payload.time : null
+  // Always use the array index as the primary discriminator to guarantee
+  // uniqueness even when the backend returns duplicate `id` values across
+  // different time buckets (e.g. the same event ID in multiple rows).
   const pointIndex = Number.isFinite(props.index) ? String(props.index) : null
   const cx = Number.isFinite(props.cx) ? String(props.cx) : "na"
   const cy = Number.isFinite(props.cy) ? String(props.cy) : "na"
-  const pointIdentity = pointId ?? pointTime ?? pointIndex ?? `${cx}:${cy}`
+  const pointIdentity = pointId ?? pointTime ?? `${cx}:${cy}`
 
-  return `${seriesKey}:${variant}:${pointIdentity}`
+  // Append the index as a tiebreaker so duplicate pointIdentity values
+  // (caused by repeated backend IDs) never collide.
+  const indexSuffix = pointIndex != null ? `:${pointIndex}` : ""
+  return `${seriesKey}:${variant}:${pointIdentity}${indexSuffix}`
 }
 
 function formatTimeRangeLabel(timeRange: string) {

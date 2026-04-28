@@ -873,7 +873,8 @@ export default function DashboardPage() {
           />
         </div>
 
-        <AISynthesis selectedDate={selectedDate} timeRange={timeRange} data={synthesis} loading={dashboardLoading} />
+        {/* ALIVE AI Synthesis – temporarily disabled */}
+        {/* <AISynthesis selectedDate={selectedDate} timeRange={timeRange} data={synthesis} loading={dashboardLoading} /> */}
       </div>
     </div>
   )

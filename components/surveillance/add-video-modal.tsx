@@ -21,6 +21,7 @@ import {
 import { Switch } from "@/components/ui/switch"
 import { FileVideo, Upload, Video, X } from "lucide-react"
 import { getCountingConfigChoices, uploadInferenceRequirement } from "@/lib/api"
+import { FootageDatePicker } from "@/components/ui/footage-date-picker"
 
 const LAST_COUNTING_CONFIG_STORAGE_KEY = "alive-last-counting-config"
 const LAST_VIDEO_FORM_VALUES_STORAGE_KEY = "alive-last-video-form-values"
@@ -353,9 +354,6 @@ export function AddVideoModal({ open, onOpenChange, locations, initialLocationId
   const [selectedFile, setSelectedFile] = useState<File | null>(null)
   const [locationId, setLocationId] = useState("")
   const [date, setDate] = useState("")
-  const [startYear, setStartYear] = useState("")
-  const [startMonth, setStartMonth] = useState("")
-  const [startDay, setStartDay] = useState("")
   const [startTime, setStartTime] = useState("")
   const [startHour, setStartHour] = useState("")
   const [startMinute, setStartMinute] = useState("")
@@ -418,10 +416,6 @@ export function AddVideoModal({ open, onOpenChange, locations, initialLocationId
 
       setLocationId(resolvedLocationId)
       setDate(resolvedDate)
-      const dateParts = parseIsoDateParts(resolvedDate)
-      setStartYear(dateParts.year)
-      setStartMonth(dateParts.month)
-      setStartDay(dateParts.day)
       setStartHour(resolvedHour)
       setStartMinute(resolvedMinute)
       setStartSecond(resolvedSecond)
@@ -452,17 +446,6 @@ export function AddVideoModal({ open, onOpenChange, locations, initialLocationId
     [startHour, startMeridiem, startMinute, startSecond],
   )
 
-  const setDatePart = useCallback(
-    (next: { year?: string; month?: string; day?: string }) => {
-      const nextYear = next.year ?? startYear
-      const nextMonth = next.month ?? startMonth
-      const nextDay = next.day ?? startDay
-      const nextDate = composeIsoDate(nextYear, nextMonth, nextDay)
-      setDate(nextDate)
-    },
-    [startDay, startMonth, startYear],
-  )
-
   useEffect(() => {
     if (selectedCountingConfig && typeof window !== "undefined") {
       window.localStorage.setItem(LAST_COUNTING_CONFIG_STORAGE_KEY, selectedCountingConfig)
@@ -485,6 +468,7 @@ export function AddVideoModal({ open, onOpenChange, locations, initialLocationId
       showLivePreview,
     })
   }, [date, locationId, open, selectedCountingConfig, showLivePreview, startHour, startMeridiem, startMinute, startSecond])
+
 
   useEffect(() => {
     if (!locationId || countingOptions.length === 0) {
@@ -546,23 +530,6 @@ export function AddVideoModal({ open, onOpenChange, locations, initialLocationId
     return null
   }, [date, isSubmitting, laneCount, locationId, roadLengthM, selectedCountingConfig, selectedFile, startTime])
 
-  const formattedDateLabel = useMemo(() => {
-    if (!date) {
-      return "Select month, day, and year."
-    }
-
-    const parsed = new Date(`${date}T00:00:00`)
-    if (Number.isNaN(parsed.getTime())) {
-      return "Select month, day, and year."
-    }
-
-    return parsed.toLocaleDateString("en-US", {
-      weekday: "short",
-      month: "short",
-      day: "numeric",
-      year: "numeric",
-    })
-  }, [date])
 
   const handleDrag = (e: React.DragEvent) => {
     e.preventDefault()
@@ -912,71 +879,16 @@ export function AddVideoModal({ open, onOpenChange, locations, initialLocationId
           {/* Date */}
           <div className="space-y-2">
             <label className="text-sm font-medium text-foreground">Start Date</label>
-            <div className="grid grid-cols-3 gap-2 sm:gap-3">
-              <Select
-                value={startMonth}
-                onValueChange={(value) => {
-                  setSubmitError(null)
-                  setStartMonth(value)
-                  setDatePart({ month: value })
-                }}
-                disabled={isSubmitting}
-              >
-                <SelectTrigger className="w-full bg-secondary border-border text-foreground">
-                  <SelectValue placeholder="Month" />
-                </SelectTrigger>
-                <SelectContent className="max-h-72 bg-card border-border">
-                  {MONTH_OPTIONS.map((option) => (
-                    <SelectItem key={option.value} value={option.value} className="text-foreground">
-                      {option.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-
-              <Select
-                value={startDay}
-                onValueChange={(value) => {
-                  setSubmitError(null)
-                  setStartDay(value)
-                  setDatePart({ day: value })
-                }}
-                disabled={isSubmitting}
-              >
-                <SelectTrigger className="w-full bg-secondary border-border text-foreground">
-                  <SelectValue placeholder="Day" />
-                </SelectTrigger>
-                <SelectContent className="max-h-72 bg-card border-border">
-                  {DAY_OPTIONS.map((option) => (
-                    <SelectItem key={option.value} value={option.value} className="text-foreground">
-                      {option.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-
-              <Select
-                value={startYear}
-                onValueChange={(value) => {
-                  setSubmitError(null)
-                  setStartYear(value)
-                  setDatePart({ year: value })
-                }}
-                disabled={isSubmitting}
-              >
-                <SelectTrigger className="w-full bg-secondary border-border text-foreground">
-                  <SelectValue placeholder="Year" />
-                </SelectTrigger>
-                <SelectContent className="max-h-72 bg-card border-border">
-                  {YEAR_OPTIONS.map((option) => (
-                    <SelectItem key={option.value} value={option.value} className="text-foreground">
-                      {option.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <p className="text-[11px] text-muted-foreground">{formattedDateLabel}</p>
+            <FootageDatePicker
+              value={date}
+              onChange={(value) => {
+                setSubmitError(null)
+                setDate(value)
+              }}
+              placeholder="Select date"
+              disabled={isSubmitting}
+              className="!h-10 rounded-lg border-border bg-secondary"
+            />
           </div>
           
           <div className="space-y-2">

@@ -14,6 +14,7 @@ interface FootageDatePickerProps {
   highlightedDates?: string[]
   placeholder?: string
   allowClear?: boolean
+  disabled?: boolean
   className?: string
 }
 
@@ -53,6 +54,7 @@ export function FootageDatePicker({
   highlightedDates = [],
   placeholder = "All dates",
   allowClear = false,
+  disabled = false,
   className,
 }: FootageDatePickerProps) {
   const [open, setOpen] = useState(false)
@@ -88,6 +90,7 @@ export function FootageDatePicker({
           <Button
             type="button"
             variant="ghost"
+            disabled={disabled}
             className="h-full w-[152px] justify-start bg-transparent p-0 text-left text-sm font-normal hover:bg-transparent focus-visible:ring-0 dark:hover:bg-transparent"
           >
             <span className={value ? "text-foreground" : "text-muted-foreground"}>{formatDateLabel(value, placeholder)}</span>
