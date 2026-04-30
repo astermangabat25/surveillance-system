@@ -750,8 +750,8 @@ export function CampusOsmMap({
 
         const marker = L.circleMarker([markerData.lat, markerData.lng], {
           radius: markerData.isSelected ? 11 : 8,
-          color: markerData.isSelected ? "#0F172A" : "#E2E8F0",
-          weight: markerData.isSelected ? 3 : 1.5,
+          color: "#F8FAFC",
+          weight: 2,
           fillColor: markerData.markerColor,
           fillOpacity: markerData.isSelected ? 1 : 0.95,
         }).addTo(activeMap)
